@@ -151,23 +151,6 @@ int ovpn_napi_poll(struct napi_struct *napi, int budget)
 	return work_done;
 }
 
-static int ovpn_transport_to_userspace(struct ovpn_struct *ovpn,
-				       struct sk_buff *skb)
-{
-	int ret;
-
-	ret = skb_linearize(skb);
-	if (ret < 0)
-		return ret;
-
-	ret = ovpn_netlink_send_packet(ovpn, skb->data, skb->len);
-	if (ret < 0)
-		return ret;
-
-	consume_skb(skb);
-	return 0;
-}
-
 /* enqueue the packet and schedule RX consumer */
 bool ovpn_recv(struct ovpn_struct *ovpn, struct ovpn_peer *peer,
 	       struct sk_buff *skb)
@@ -195,27 +178,6 @@ static int ovpn_decrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 
 	/* save original packet size for stats accounting */
 	OVPN_SKB_CB(skb)->rx_stats_size = skb->len;
-
-	/* we only handle OVPN_DATA_V2 packets from known peers here.
-	 *
-	 * all other packets are sent to userspace via netlink
-	 */
-	if (!pskb_may_pull(skb, 1)) {
-		ret = -ENODATA;
-		goto drop;
-	}
-
-	if (unlikely(ovpn_opcode_from_skb(skb) != OVPN_DATA_V2)) {
-		ret = ovpn_transport_to_userspace(peer->ovpn, skb);
-		if (ret < 0)
-			goto drop;
-
-		/* even though the packet handling was successful, return -1 to
-		 * tell the caller that no packet was enqueued for delivery to
-		 * the tun interface, therefore NAPI should not be scheduled
-		 */
-		return -1;
-	}
 
 	/* get the key slot matching the key Id in the received packet */
 	key_id = ovpn_key_id_from_skb(skb);

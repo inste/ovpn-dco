@@ -8,6 +8,7 @@
 
 #include "main.h"
 #include "bind.h"
+#include "netlink.h"
 #include "ovpn.h"
 #include "ovpnstruct.h"
 #include "peer.h"
@@ -69,6 +70,7 @@ int ovpn_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
 {
 	struct ovpn_struct *ovpn;
 	struct ovpn_peer *peer;
+	int ret;
 
 	/* pop off outer UDP header */
 	__skb_pull(skb, sizeof(struct udphdr));
@@ -77,6 +79,22 @@ int ovpn_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
 	if (unlikely(!ovpn)) {
 		pr_err_ratelimited("%s: cannot obtain ovpn object from UDP socket\n", __func__);
 		goto drop;
+	}
+
+	/* we only handle OVPN_DATA_V2 packets from known peers here.
+	 *
+	 * all other packets are sent to userspace via netlink
+	 */
+	if (!pskb_may_pull(skb, 1))
+		goto drop;
+
+	if (unlikely(ovpn_opcode_from_skb(skb) != OVPN_DATA_V2)) {
+		ret = ovpn_transport_to_userspace(ovpn, skb);
+		if (ret < 0)
+			goto drop;
+
+		consume_skb(skb);
+		return 0;
 	}
 
 	/* lookup peer */

@@ -609,8 +609,7 @@ err_free_msg:
 	return ret;
 }
 
-int ovpn_netlink_send_packet(struct ovpn_struct *ovpn, const uint8_t *buf,
-			     size_t len)
+static int ovpn_netlink_send_packet(struct ovpn_struct *ovpn, const uint8_t *buf, size_t len)
 {
 	struct sk_buff *msg;
 	void *hdr;
@@ -648,6 +647,22 @@ int ovpn_netlink_send_packet(struct ovpn_struct *ovpn, const uint8_t *buf,
 err_free_msg:
 	nlmsg_free(msg);
 	return ret;
+}
+
+int ovpn_transport_to_userspace(struct ovpn_struct *ovpn, struct sk_buff *skb)
+{
+	int ret;
+
+	ret = skb_linearize(skb);
+	if (ret < 0)
+		return ret;
+
+	ret = ovpn_netlink_send_packet(ovpn, skb->data, skb->len);
+	if (ret < 0)
+		return ret;
+
+	consume_skb(skb);
+	return 0;
 }
 
 static int ovpn_netlink_notify(struct notifier_block *nb, unsigned long state,
