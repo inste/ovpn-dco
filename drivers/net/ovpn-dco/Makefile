@@ -6,7 +6,7 @@
 #
 # Author:	Antonio Quartulli <antonio@openvpn.net>
 
-obj-$(CONFIG_OVPN_DCO) += ovpn-dco.o
+obj-m += ovpn-dco.o
 ovpn-dco-y += main.o
 ovpn-dco-y += addr.o
 ovpn-dco-y += bind.o

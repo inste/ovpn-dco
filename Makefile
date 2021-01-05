@@ -1,64 +1,52 @@
-# SPDX-License-Identifier: GPL-2.0
-# Copyright (C) 2020 OpenVPN, Inc.
-#
-#  Author:	Antonio Quartulli <antonio@openvpn.net>
+.PHONY: all version distclean clean
 
-PWD:=$(shell pwd)
-KERNEL_SRC ?= /lib/modules/$(shell uname -r)/build
-ifeq ($(shell cd $(KERNEL_SRC) && pwd),)
-$(warning $(KERNEL_SRC) is missing, please set KERNEL_SRC)
-endif
+ifneq ($(KERNELRELEASE),)
 
-export KERNEL_SRC
-RM ?= rm -f
-CP := cp -fpR
-LN := ln -sf
-DEPMOD := depmod -a
+NOSTDINC_FLAGS += -I$(SUBDIRS)/include/
 
-REVISION= $(shell	if [ -d "$(PWD)/.git" ]; then \
-				echo $$(git --git-dir="$(PWD)/.git" describe --always --dirty --match "v*" |sed 's/^v//' 2> /dev/null || echo "[unknown]"); \
-			fi)
-NOSTDINC_FLAGS += \
-	-I$(PWD)/include/ \
-	$(CFLAGS) \
-	-include $(PWD)/linux-compat.h
-#	-I$(PWD)/compat-include/
+obj-m			:= ovpn-dco.o
+ovpn-dco-y		+= drivers/net/ovpn-dco/main.o
+ovpn-dco-y		+= drivers/net/ovpn-dco/addr.o
+ovpn-dco-y		+= drivers/net/ovpn-dco/bind.o
+ovpn-dco-y		+= drivers/net/ovpn-dco/crypto.o
+ovpn-dco-y		+= drivers/net/ovpn-dco/ovpn.o
+ovpn-dco-y		+= drivers/net/ovpn-dco/peer.o
+ovpn-dco-y		+= drivers/net/ovpn-dco/sock.o
+ovpn-dco-y		+= drivers/net/ovpn-dco/stats.o
+ovpn-dco-y		+= drivers/net/ovpn-dco/netlink.o
+ovpn-dco-y		+= drivers/net/ovpn-dco/crypto_none.o
+ovpn-dco-y		+= drivers/net/ovpn-dco/crypto_aead.o
+ovpn-dco-y		+= drivers/net/ovpn-dco/pktid.o
+ovpn-dco-y		+= drivers/net/ovpn-dco/tcp.o
+ovpn-dco-y		+= drivers/net/ovpn-dco/udp.o
 
-ifneq ($(REVISION),)
-NOSTDINC_FLAGS += -DOVPN_DCO_VERSION=\"$(REVISION)\"
-endif
+else
 
-ifeq ($(DEBUG),1)
-NOSTDINC_FLAGS += -DDEBUG=1
-endif
+PWD		:= $(shell pwd)
+KERNELDIR	?= /lib/modules/$(shell uname -r)/build
+VERSION_FILE	:= ovpn-dco_version.h
+VERSION		:= $(shell git describe --tag | sed -e 's/-g/-/')
+SAVED_VERSION	:= \
+	$(shell sed -e 's/.*"\(.*\)".*/\1/p;d' $(VERSION_FILE) 2> /dev/null)
 
-obj-y += drivers/net/ovpn-dco/
-export ovpn-dco-y
+all: version
+	$(MAKE) -C $(KERNELDIR) M=$(PWD) modules
 
-BUILD_FLAGS := \
-	M=$(PWD) \
-	PWD=$(PWD) \
-	REVISION=$(REVISION) \
-	CONFIG_OVPN_DCO=m \
-	INSTALL_MOD_DIR=updates/
+.PHONY: $(if $(filter $(VERSION),$(SAVED_VERSION)),,$(VERSION_FILE))
 
-all: config
-	$(MAKE) -C $(KERNEL_SRC) $(BUILD_FLAGS)	modules
+version: $(VERSION_FILE)
+
+$(VERSION_FILE):
+	@echo "#ifndef __DCO_VERSION_H__"             > $(VERSION_FILE)
+	@echo "#define __DCO_VERSION_H__"            >> $(VERSION_FILE)
+	@echo "#define DCO_VERSION \""$(VERSION)"\"" >> $(VERSION_FILE)
+	@echo "#endif /* __DCO_VERSION_H__ */"       >> $(VERSION_FILE)
+	@echo ""                                     >> $(VERSION_FILE)
+
+distclean: clean
 
 clean:
-	$(RM) psk_client
-	$(RM) compat-autoconf.h*
-	$(MAKE) -C $(KERNEL_SRC) $(BUILD_FLAGS) clean
-	$(MAKE) -C tests clean
+	$(MAKE) -C $(KERNELDIR) M=$(PWD) clean
+	@rm -f $(VERSION_FILE)
 
-install: config
-	$(MAKE) -C $(KERNEL_SRC) $(BUILD_FLAGS) modules_install
-	$(DEPMOD)
-
-config:
-	$(PWD)/gen-compat-autoconf.sh $(PWD)/compat-autoconf.h
-
-tests:
-	$(MAKE) -C tests
-
-.PHONY: all clean install config tests 
+endif

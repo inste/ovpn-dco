@@ -18,6 +18,8 @@
 #include <net/udp.h>
 #include <net/udp_tunnel.h>
 
+#include <linux/file.h>
+
 /* Detach socket from encapsulation handler and/or other callbacks */
 static void ovpn_sock_unset_udp_cb(struct socket *sock)
 {

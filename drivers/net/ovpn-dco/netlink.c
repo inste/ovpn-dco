@@ -15,6 +15,7 @@
 
 #include <uapi/linux/ovpn_dco.h>
 
+#include <linux/file.h>
 #include <linux/netdevice.h>
 #include <linux/netlink.h>
 #include <linux/rcupdate.h>
@@ -153,7 +154,11 @@ static int ovpn_netlink_get_key_dir(struct genl_info *info, struct nlattr *key,
 	int ret;
 
 	ret = nla_parse_nested(attrs, OVPN_KEY_DIR_ATTR_MAX, key,
-			       ovpn_netlink_policy_key_dir, info->extack);
+			       ovpn_netlink_policy_key_dir
+#if LINUX_VERSION_CODE > KERNEL_VERSION(5, 2, 0)
+			       ,info->extack
+#endif
+			       );
 	if (ret)
 		return ret;
 
@@ -308,10 +313,17 @@ static int ovpn_netlink_parse_sockaddr(struct genl_info *info,
 	int ret;
 
 	ret = nla_parse_nested(attrs, OVPN_SOCKADDR_ATTR_MAX, key,
-			       ovpn_netlink_policy_sockaddr, info->extack);
+			       ovpn_netlink_policy_sockaddr
+#if LINUX_VERSION_CODE > KERNEL_VERSION(5, 2, 0)
+			       , info->extack
+#endif
+			       );
 	if (ret) {
 		pr_err("error while parsing sockaddr: %s\n",
-		       info->extack ? info->extack->_msg : "null");
+#if LINUX_VERSION_CODE > KERNEL_VERSION(5, 2, 0)
+		       info->extack ? info->extack->_msg :
+#endif
+				"null");
 		return -EINVAL;
 	}
 
@@ -574,55 +586,73 @@ static int ovpn_netlink_packet(struct sk_buff *skb, struct genl_info *info)
 static const struct genl_ops ovpn_netlink_ops[] = {
 	{
 		.cmd = OVPN_CMD_START_VPN,
+#if LINUX_VERSION_CODE > KERNEL_VERSION(5, 2, 0)
 		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
+#endif
 		.flags = GENL_ADMIN_PERM,
 		.doit = ovpn_netlink_start_vpn,
 	},
 	{
 		.cmd = OVPN_CMD_STOP_VPN,
+#if LINUX_VERSION_CODE > KERNEL_VERSION(5, 2, 0)
 		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
+#endif
 		.flags = GENL_ADMIN_PERM,
 		.doit = ovpn_netlink_stop_vpn,
 	},
 	{
 		.cmd = OVPN_CMD_NEW_PEER,
+#if LINUX_VERSION_CODE > KERNEL_VERSION(5, 2, 0)
 		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
+#endif
 		.flags = GENL_ADMIN_PERM,
 		.doit = ovpn_netlink_new_peer,
 	},
 	{
 		.cmd = OVPN_CMD_SET_PEER,
+#if LINUX_VERSION_CODE > KERNEL_VERSION(5, 2, 0)
 		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
+#endif
 		.flags = GENL_ADMIN_PERM,
 		.doit = ovpn_netlink_set_peer,
 	},
 	{
 		.cmd = OVPN_CMD_NEW_KEY,
+#if LINUX_VERSION_CODE > KERNEL_VERSION(5, 2, 0)
 		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
+#endif
 		.flags = GENL_ADMIN_PERM,
 		.doit = ovpn_netlink_new_key,
 	},
 	{
 		.cmd = OVPN_CMD_DEL_KEY,
+#if LINUX_VERSION_CODE > KERNEL_VERSION(5, 2, 0)
 		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
+#endif
 		.flags = GENL_ADMIN_PERM,
 		.doit = ovpn_netlink_del_key,
 	},
 	{
 		.cmd = OVPN_CMD_SWAP_KEYS,
+#if LINUX_VERSION_CODE > KERNEL_VERSION(5, 2, 0)
 		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
+#endif
 		.flags = GENL_ADMIN_PERM,
 		.doit = ovpn_netlink_swap_keys,
 	},
 	{
 		.cmd = OVPN_CMD_REGISTER_PACKET,
+#if LINUX_VERSION_CODE > KERNEL_VERSION(5, 2, 0)
 		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
+#endif
 		.flags = GENL_ADMIN_PERM,
 		.doit = ovpn_netlink_register_packet,
 	},
 	{
 		.cmd = OVPN_CMD_PACKET,
+#if LINUX_VERSION_CODE > KERNEL_VERSION(5, 2, 0)
 		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
+#endif
 		.flags = GENL_ADMIN_PERM,
 		.doit = ovpn_netlink_packet,
 	},
@@ -633,7 +663,9 @@ static struct genl_family ovpn_netlink_family __ro_after_init = {
 	.name = OVPN_NL_NAME,
 	.version = 1,
 	.maxattr = OVPN_ATTR_MAX,
+#if LINUX_VERSION_CODE > KERNEL_VERSION(5, 2, 0)
 	.policy = ovpn_netlink_policy,
+#endif
 	.netnsok = true,
 	.pre_doit = ovpn_pre_doit,
 	.post_doit = ovpn_post_doit,

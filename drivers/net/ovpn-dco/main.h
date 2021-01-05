@@ -14,6 +14,8 @@
 #define OVPN_DCO_VERSION "2.0.0"
 #endif
 
+#include "../../../linux-compat.h"
+
 #define DEBUG_FREE		0
 #define DEBUG_CRYPTO		0
 #define DEBUG_PEER_BY_ID	0

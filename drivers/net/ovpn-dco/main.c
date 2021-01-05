@@ -142,11 +142,14 @@ static void ovpn_setup(struct net_device *dev)
 				 NETIF_F_GSO_SOFTWARE;
 
 	dev->ethtool_ops = &ovpn_ethtool_ops;
-	dev->needs_free_netdev = true;
-
 	dev->netdev_ops = &ovpn_netdev_ops;
 
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 9))
+	dev->needs_free_netdev = true;
 	dev->priv_destructor = ovpn_struct_free;
+#else
+	dev->destructor = ovpn_struct_free;
+#endif
 
 	/* Point-to-Point TUN Device */
 	dev->hard_header_len = 0;

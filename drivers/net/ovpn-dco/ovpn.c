@@ -111,7 +111,7 @@ static void tun_netdev_write(struct ovpn_peer *peer, struct sk_buff *skb)
 
 	/* set transport header */
 	skb->transport_header = 0;
-	skb_probe_transport_header(skb);
+	skb_probe_transport_header_(skb);
 
 	/* update per-cpu RX stats with the stored size of encrypted packet */
 
