@@ -17,6 +17,7 @@
 #define NLA_POLICY_MIN_LEN(x) { .type = NLA_UNSPEC }
 #define NLA_POLICY_RANGE(x, y, z) { .type = NLA_UNSPEC }
 #define NLA_POLICY_NESTED(x) { .type = NLA_NESTED }
+#define NLA_POLICY_EXACT_LEN(x) { .type = NLA_UNSPEC }
 #endif
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 15, 0)

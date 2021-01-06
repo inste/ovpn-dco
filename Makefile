@@ -6,7 +6,6 @@ NOSTDINC_FLAGS += -I$(SUBDIRS)/include/
 
 obj-m			:= ovpn-dco.o
 ovpn-dco-y		+= drivers/net/ovpn-dco/main.o
-ovpn-dco-y		+= drivers/net/ovpn-dco/addr.o
 ovpn-dco-y		+= drivers/net/ovpn-dco/bind.o
 ovpn-dco-y		+= drivers/net/ovpn-dco/crypto.o
 ovpn-dco-y		+= drivers/net/ovpn-dco/ovpn.o

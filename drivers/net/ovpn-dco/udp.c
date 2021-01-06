@@ -18,7 +18,11 @@
 #include <net/addrconf.h>
 #include <net/dst_cache.h>
 #include <net/route.h>
+
+#if LINUX_VERSION_CODE > KERNEL_VERSION(5, 2, 0)
 #include <net/ipv6_stubs.h>
+#endif
+
 #include <net/udp_tunnel.h>
 
 /* Lookup ovpn_peer using incoming encrypted transport packet.
