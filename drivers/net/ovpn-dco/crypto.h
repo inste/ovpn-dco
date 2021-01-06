@@ -69,6 +69,7 @@ struct ovpn_crypto_key_slot {
 	int remote_peer_id;
 	int key_id;
 
+	enum ovpn_cipher_alg alg;
 	struct crypto_aead *encrypt;
 	struct crypto_aead *decrypt;
 	struct ovpn_nonce_tail nonce_tail_xmit;

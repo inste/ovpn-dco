@@ -7,7 +7,7 @@
 set -x
 
 OVPN_CLI=./ovpn-cli
-ALG=${ALG:-aes}
+ALG=${ALG:-aes-gcm}
 
 function create_ns() {
 	ip -n peer$1 link del tun0

@@ -350,12 +350,14 @@ err:
 
 static int ovpn_read_cipher(const char *cipher, struct ovpn_ctx *ctx)
 {
-	if (strcmp(cipher, "aes") == 0)
+	if (strcmp(cipher, "aes-gcm") == 0)
 		ctx->cipher = OVPN_CIPHER_ALG_AES_GCM;
 	else if (strcmp(cipher, "chachapoly") == 0)
 		ctx->cipher = OVPN_CIPHER_ALG_CHACHA20_POLY1305;
 	else if (strcmp(cipher, "none") == 0)
 		ctx->cipher = OVPN_CIPHER_ALG_NONE;
+	else if (strcmp(cipher, "aes-ccm") == 0)
+		ctx->cipher = OVPN_CIPHER_ALG_AES_CCM;
 	else
 		return -ENOTSUP;
 
@@ -1053,7 +1055,7 @@ static void usage(const char *cmd)
 	fprintf(stderr,
 		"* new_key <cipher> <key_dir> <key_file>: set data channel key\n");
 	fprintf(stderr,
-		"\tcipher: cipher to use, supported: aes (AES-GCM), chachapoly (CHACHA20POLY1305), none\n");
+		"\tcipher: cipher to use, supported: aes-gcm, chachapoly (CHACHA20POLY1305), aes-ccm, none\n");
 	fprintf(stderr,
 		"\tkey_dir: key direction, must 0 on one host and 1 on the other\n");
 	fprintf(stderr, "\tkey_file: file containing the pre-shared key\n\n");
