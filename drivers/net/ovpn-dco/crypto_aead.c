@@ -161,7 +161,7 @@ static int ovpn_aead_encrypt(struct ovpn_crypto_key_slot *ks,
 	memcpy(skb->data, iv_ptr, NONCE_WIRE_SIZE);
 
 	/* add packet op as head of additional data */
-	op = ovpn_op32_compose(OVPN_DATA_V2, ks->key_id, ks->remote_peer_id);
+	op = ovpn_opcode_compose(OVPN_DATA_V2, ks->key_id, ks->remote_peer_id);
 	__skb_push(skb, OVPN_OP_SIZE_V2);
 	BUILD_BUG_ON(sizeof(op) != OVPN_OP_SIZE_V2);
 	*((__force __be32 *)skb->data) = htonl(op);
@@ -187,8 +187,7 @@ free_req:
 	return ret;
 }
 
-static int ovpn_aead_decrypt(struct ovpn_crypto_key_slot *ks,
-			     struct sk_buff *skb, unsigned int op)
+static int ovpn_aead_decrypt(struct ovpn_crypto_key_slot *ks, struct sk_buff *skb)
 {
 	const unsigned int tag_size = crypto_aead_authsize(ks->decrypt);
 	u8 *sg_data, *iv_ptr, iv[MAX_IV_SIZE] = { 0 };
@@ -205,8 +204,14 @@ static int ovpn_aead_decrypt(struct ovpn_crypto_key_slot *ks,
 	payload_len = skb->len - payload_offset;
 
 	/* sanity check on packet size, payload size must be >= 0 */
-	if (unlikely(payload_len < 0 || !pskb_may_pull(skb, payload_offset)))
+	if (unlikely(payload_len < 0))
 		return -EINVAL;
+
+	/* Prepare the skb data buffer to be accessed up until the auth tag.
+	 * This is required because this area is directly mapped into the sg list.
+	 */
+	if (unlikely(!pskb_may_pull(skb, payload_offset)))
+		return -ENODATA;
 
 	/* get number of skb frags and ensure that packet data is writable */
 	nfrags = skb_cow_data(skb, 0, &trailer);

@@ -14,9 +14,11 @@
 #include "proto.h"
 #include "udp.h"
 
+#include <linux/inetdevice.h>
+#include <net/addrconf.h>
 #include <net/dst_cache.h>
 #include <net/route.h>
-#include <net/ip6_route.h>
+#include <net/ipv6_stubs.h>
 #include <net/udp_tunnel.h>
 
 /* Lookup ovpn_peer using incoming encrypted transport packet.
@@ -53,10 +55,10 @@ err:
 	return NULL;
 }
 
-/* Here we look at an incoming OpenVPN UDP packet.  If we are able
- * to process it, we will send it directly to tun interface.
- * Otherwise, send it up to userspace.
- * Called in softirq context.
+/**
+ * Start processing a received UDP packet.
+ * If the first byte of the payload is DATA_V2, the packet is further processed,
+ * otherwise it is forwarded to the UDP stack for delivery to user space.
  *
  * Return codes:
  *  0 : we consumed or dropped packet
@@ -65,27 +67,51 @@ err:
  */
 int ovpn_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
 {
+	struct ovpn_peer *peer = NULL;
 	struct ovpn_struct *ovpn;
-	struct ovpn_peer *peer;
+	int ret;
+
+	/* Make sure the first byte of the skb data buffer after the UDP header is accessible.
+	 * It is going to be used to fetch the OP code now and the key ID later
+	 */
+	if (unlikely(!pskb_may_pull(skb, sizeof(struct udphdr) + 1)))
+		return -ENODATA;
+
+	/* only DATA_V2 packets are handled in kernel space, the rest goes to user space */
+	if (unlikely(ovpn_opcode_from_skb(skb, sizeof(struct udphdr)) != OVPN_DATA_V2)) {
+		return 1;
+	}
 
 	/* pop off outer UDP header */
 	__skb_pull(skb, sizeof(struct udphdr));
 
 	ovpn = ovpn_from_udp_sock(sk);
-	if (unlikely(!ovpn))
+	if (unlikely(!ovpn)) {
+		pr_err_ratelimited("%s: cannot obtain ovpn object from UDP socket\n", __func__);
 		goto drop;
+	}
 
 	/* lookup peer */
 	peer = ovpn_lookup_peer_via_transport(ovpn, skb);
-	if (!peer)
+	if (unlikely(!peer)) {
+		pr_debug_ratelimited("%s: packet received from unknown peer\n", __func__);
 		goto drop;
+	}
 
-	if (!ovpn_recv(ovpn, peer, skb))
+	ret = ovpn_recv(ovpn, peer, skb);
+	if (unlikely(ret < 0)) {
+		pr_err_ratelimited("%s: cannot handle incoming packet: %d\n", __func__, ret);
 		goto drop;
+	}
 
-	return 0;
+	/* should this be a non DATA_V2 packet, ret will be >0 and this will instruct the UDP
+	 * stack to continue processing this packet as usual (i.e. deliver to user space)
+	 */
+	return ret;
 
 drop:
+	if (peer)
+		ovpn_peer_put(peer);
 	kfree_skb(skb);
 	return 0;
 }
@@ -96,24 +122,28 @@ static int ovpn_udp4_output(struct ovpn_struct *ovpn, struct ovpn_bind *bind,
 {
 	struct rtable *rt;
 	struct flowi4 fl = {
-		.saddr = bind->sapair.local.u.in4.sin_addr.s_addr,
-		.daddr = bind->sapair.remote.u.in4.sin_addr.s_addr,
-		.fl4_sport = bind->sapair.local.u.in4.sin_port,
-		.fl4_dport = bind->sapair.remote.u.in4.sin_port,
+		.daddr = bind->sa.in4.sin_addr.s_addr,
+		.fl4_sport = inet_sk(sk)->inet_sport,
+		.fl4_dport = bind->sa.in4.sin_port,
 		.flowi4_proto = sk->sk_protocol,
 		.flowi4_mark = sk->sk_mark,
 		.flowi4_oif = sk->sk_bound_dev_if,
 	};
 
 	rt = dst_cache_get_ip4(cache, &fl.saddr);
-	if (rt)
+	if (rt && likely(inet_confirm_addr(sock_net(sk), NULL, 0, fl.saddr, RT_SCOPE_HOST)))
 		goto transmit;
+
+	/* we may end up here when the cached address is not usable anymore.
+	 * In this case we reset address/cache and perform a new look up
+	 */
+	fl.saddr = 0;
+	dst_cache_reset(cache);
 
 	rt = ip_route_output_flow(sock_net(sk), &fl, sk);
 	if (IS_ERR(rt)) {
-		net_dbg_ratelimited("%s: no route to host %pISpc\n",
-				    ovpn->dev->name,
-				    &bind->sapair.remote.u.in4);
+		net_dbg_ratelimited("%s: no route to host %pISpc\n", ovpn->dev->name,
+				    &bind->sa.in4);
 		return -EHOSTUNREACH;
 	}
 	dst_cache_set_ip4(cache, &rt->dst, fl.saddr);
@@ -134,27 +164,27 @@ static int ovpn_udp6_output(struct ovpn_struct *ovpn, struct ovpn_bind *bind,
 	int ret;
 
 	struct flowi6 fl = {
-		.saddr = bind->sapair.local.u.in6.sin6_addr,
-		.daddr = bind->sapair.remote.u.in6.sin6_addr,
-		.fl6_sport = bind->sapair.local.u.in6.sin6_port,
-		.fl6_dport = bind->sapair.remote.u.in6.sin6_port,
+		.daddr = bind->sa.in6.sin6_addr,
+		.fl6_sport = inet_sk(sk)->inet_sport,
+		.fl6_dport = bind->sa.in6.sin6_port,
 		.flowi6_proto = sk->sk_protocol,
 		.flowi6_mark = sk->sk_mark,
-		.flowi6_oif = sk->sk_bound_dev_if,
+		.flowi6_oif = bind->sa.in6.sin6_scope_id,
 	};
 
-	if (bind->sapair.remote.u.in6.sin6_scope_id &&
-	    __ipv6_addr_needs_scope_id(__ipv6_addr_type(&fl.daddr)))
-		fl.flowi6_oif = bind->sapair.remote.u.in6.sin6_scope_id;
-
 	dst = dst_cache_get_ip6(cache, &fl.saddr);
-	if (dst)
+	if (dst && likely(ipv6_chk_addr(sock_net(sk), &fl.saddr, NULL, 0)))
 		goto transmit;
 
-	dst = ip6_route_output(sock_net(sk), sk, &fl);
-	if (unlikely(dst->error < 0)) {
-		ret = dst->error;
-		dst_release(dst);
+	/* we may end up here when the cached address is not usable anymore.
+	 * In this case we reset address/cache and perform a new look up
+	 */
+	fl.saddr = in6addr_any;
+	dst_cache_reset(cache);
+
+	dst = ipv6_stub->ipv6_dst_lookup_flow(sock_net(sk), sk, &fl, NULL);
+	if (IS_ERR(dst)) {
+		ret = PTR_ERR(dst);
 		return ret;
 	}
 	dst_cache_set_ip6(cache, dst, &fl.saddr);
@@ -184,7 +214,7 @@ static int ovpn_udp_output(struct ovpn_struct *ovpn, struct ovpn_bind *bind,
 	if (!skb->destructor)
 		skb->sk = NULL;
 
-	switch (bind->sapair.local.family) {
+	switch (bind->sa.in4.sin_family) {
 	case AF_INET:
 		ret = ovpn_udp4_output(ovpn, bind, cache, sk, skb);
 		break;
@@ -217,14 +247,18 @@ void ovpn_udp_send_skb(struct ovpn_struct *ovpn, struct ovpn_peer *peer,
 
 	/* get socket info */
 	sock = peer->sock;
-	if (unlikely(!sock))
+	if (unlikely(!sock)) {
+		pr_debug_ratelimited("%s: no sock for remote peer\n", __func__);
 		goto out;
+	}
 
 	rcu_read_lock();
 	/* get binding */
 	bind = rcu_dereference(peer->bind);
-	if (unlikely(!bind))
+	if (unlikely(!bind)) {
+		pr_debug_ratelimited("%s: no bind for remote peer\n", __func__);
 		goto out_unlock;
+	}
 
 	/* note event of authenticated packet xmit for keepalive */
 	ovpn_peer_keepalive_xmit_reset(peer);

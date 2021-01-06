@@ -15,39 +15,16 @@
 #include <linux/in6.h>
 #include <net/ipv6.h>
 
-extern u32 ovpn_hashrnd __read_mostly;
-
-struct ovpn_addr {
-	bool v6;
-	union {
-		struct in_addr a4;
-		struct in6_addr a6;
-	} u;
-};
-
 /* our basic transport layer address */
 struct ovpn_sockaddr {
-	unsigned short int family;
 	union {
 		struct sockaddr_in in4;
 		struct sockaddr_in6 in6;
-	} u;
-};
+	};
 
-/* our basic association between remote and local address */
-struct ovpn_sockaddr_pair {
-	bool skb_hash_defined; /* true if skb_hash is defined */
-	u32 skb_hash; /* skb hash (L4) */
-	struct ovpn_sockaddr local; /* local ingress address */
-	struct ovpn_sockaddr remote; /* peer source address */
+	bool skb_hash_defined;
+	u32 skb_hash;
 };
-
-/* assumes that ovpn_hash_secret_init has been called */
-static __always_inline u32 ovpn_hash_3words(const u32 a, const u32 b,
-					    const u32 c)
-{
-	return jhash_3words(a, b, c, ovpn_hashrnd);
-}
 
 /* mask out the non-prefix bits in an IPv4 address */
 static inline __be32 ovpn_ipv4_network_addr(const __be32 addr,
@@ -59,91 +36,14 @@ static inline __be32 ovpn_ipv4_network_addr(const __be32 addr,
 	return addr & htonl(~((1 << (32 - prefix_len)) - 1));
 }
 
-/* return an IPv4 address / prefix_len hash */
-static inline u32 ovpn_ipv4_hash(const __be32 addr,
-				 const unsigned int prefix_len)
-{
-	return ovpn_hash_3words(AF_INET, addr, prefix_len);
-}
-
-#if IS_ENABLED(CONFIG_IPV6)
-/* return an IPv6 address / prefix_len hash */
-static inline u32 ovpn_ipv6_hash(const struct in6_addr *addr,
-				 const unsigned int prefix_len)
-{
-	return jhash_2words(AF_INET6,
-			    prefix_len,
-			    __ipv6_addr_jhash(addr, ovpn_hashrnd));
-}
-#endif
-
-/* Compare two ovpn_sockaddr_pair objects for equality,
- * considering family, addr, and port.
- * Note: we assume that the local/remote family values
- * within the same ovpn_sockaddr_pair are equal
- * (use ovpn_sockaddr_pair_validate below to validate this).
- */
-static inline bool ovpn_sockaddr_pair_eq(const struct ovpn_sockaddr_pair *p1,
-					 const struct ovpn_sockaddr_pair *p2)
-{
-	if (p1->skb_hash_defined != p2->skb_hash_defined)
-		return false;
-
-	if (p1->skb_hash_defined && p1->skb_hash != p2->skb_hash)
-		return false;
-
-	if (p1->local.family != p2->local.family)
-		return false;
-
-	switch (p1->local.family) {
-	case AF_INET:
-		if (p1->local.u.in4.sin_addr.s_addr !=
-		    p2->local.u.in4.sin_addr.s_addr)
-			return false;
-
-		if (p1->local.u.in4.sin_port != p2->local.u.in4.sin_port)
-			return false;
-
-		if (p1->remote.u.in4.sin_addr.s_addr !=
-		    p2->remote.u.in4.sin_addr.s_addr)
-			return false;
-
-		if (p1->remote.u.in4.sin_port != p2->remote.u.in4.sin_port)
-			return false;
-		break;
-	case AF_INET6:
-		if (!ipv6_addr_equal(&p1->local.u.in6.sin6_addr,
-				     &p2->local.u.in6.sin6_addr))
-			return false;
-
-		if (p1->local.u.in6.sin6_port != p2->local.u.in6.sin6_port)
-			return false;
-
-		if (!ipv6_addr_equal(&p1->remote.u.in6.sin6_addr,
-				     &p2->remote.u.in6.sin6_addr))
-			return false;
-
-		if (p1->remote.u.in6.sin6_port != p2->remote.u.in6.sin6_port)
-			return false;
-		break;
-	default:
-		return false;
-	}
-
-	return true;
-}
-
-/* Validate a struct ovpn_sockaddr_pair:
+/* Validate a struct ovpn_sockaddr:
  * 1. family must be AF_INET or AF_INET6
  * 2. family must be consistent
  */
 static inline int
-ovpn_sockaddr_pair_validate(const struct ovpn_sockaddr_pair *p)
+ovpn_sockaddr_validate(const struct sockaddr *sa)
 {
-	if (p->local.family != p->remote.family)
-		return -EINVAL;
-
-	switch (p->local.family) {
+	switch (sa->sa_family) {
 	case AF_INET:
 	case AF_INET6:
 		return 0;
@@ -177,14 +77,5 @@ static inline int skb_protocol_to_ip_ver(const struct sk_buff *skb)
 		return 0;
 	}
 }
-
-int ovpn_sockaddr_pair_from_skb(struct ovpn_sockaddr_pair *sapair,
-				struct sk_buff *skb);
-
-int ovpn_sockaddr_pair_from_sock(struct ovpn_sockaddr_pair *sapair,
-				 struct sock *sk,
-				 const bool tcp);
-
-void ovpn_hash_secret_init(void);
 
 #endif /* _NET_OVPN_DCO_OVPNADDR_H_ */

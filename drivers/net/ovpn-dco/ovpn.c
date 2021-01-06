@@ -151,83 +151,53 @@ int ovpn_napi_poll(struct napi_struct *napi, int budget)
 	return work_done;
 }
 
-static int ovpn_transport_to_userspace(struct ovpn_struct *ovpn,
-				       struct sk_buff *skb)
-{
-	int ret;
-
-	ret = skb_linearize(skb);
-	if (ret < 0)
-		return ret;
-
-	ret = ovpn_netlink_send_packet(ovpn, skb->data, skb->len);
-	if (ret < 0)
-		return ret;
-
-	consume_skb(skb);
-	return 0;
-}
-
-/* enqueue the packet and schedule RX consumer */
-bool ovpn_recv(struct ovpn_struct *ovpn, struct ovpn_peer *peer,
-	       struct sk_buff *skb)
+/* Entry point for processing an incoming packet (in skb form)
+ *
+ * Enqueue the packet and schedule RX consumer.
+ * Reference to peer is dropped only in case of success.
+ *
+ * Return 0  if the packet was handled (and consumed)
+ * Return <0 in case of error (return value is error code)
+ */
+int ovpn_recv(struct ovpn_struct *ovpn, struct ovpn_peer *peer, struct sk_buff *skb)
 {
 	int ret;
 
 	ret = __ptr_ring_produce(&peer->rx_ring, skb);
-	if (ret < 0) {
-		ovpn_peer_put(peer);
-		return false;
-	}
+	if (unlikely(ret < 0))
+		return -ENOSPC;
 
 	if (!queue_work(ovpn->crypto_wq, &peer->decrypt_work))
 		ovpn_peer_put(peer);
 
-	return true;
+	return 0;
 }
 
 static int ovpn_decrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 {
 	struct ovpn_crypto_key_slot *ks;
 	unsigned int rx_stats_size;
-	int key_id, ret = -1;
-	u32 op;
-
-	/* get opcode */
-	op = ovpn_op32_from_skb(skb, NULL);
+	int ret = -1;
+	u8 key_id;
 
 	/* save original packet size for stats accounting */
 	OVPN_SKB_CB(skb)->rx_stats_size = skb->len;
 
-	/* we only handle OVPN_DATA_V2 packets from known peers here.
-	 *
-	 * all other packets are sent to userspace via netlink
-	 */
-	if (unlikely(!ovpn_opcode_is_data_v2(op))) {
-		ret = ovpn_transport_to_userspace(peer->ovpn, skb);
-		if (ret < 0)
-			goto drop;
-
-		/* even though the packet handling was successful, return -1 to
-		 * tell the caller that no packet was enqueued for delivery to
-		 * the tun interface, therefore NAPI should not be scheduled
-		 */
-		return -1;
+	/* get the key slot matching the key Id in the received packet */
+	key_id = ovpn_key_id_from_skb(skb);
+	ks = ovpn_crypto_key_id_to_slot(&peer->crypto, key_id);
+	if (unlikely(!ks)) {
+		pr_info_ratelimited("%s: no available key for this ID: %d\n", __func__, key_id);
+		goto drop;
 	}
 
-	/* get the key slot matching the key Id in the received packet */
-	key_id = ovpn_key_id_extract(op);
-	ks = ovpn_crypto_key_id_to_slot(&peer->crypto, key_id);
-	if (unlikely(!ks))
-		goto drop;
-
 	/* decrypt */
-	ret = ks->ops->decrypt(ks, skb, op);
+	ret = ks->ops->decrypt(ks, skb);
 
 	ovpn_crypto_key_slot_put(ks);
 
 	if (unlikely(ret < 0)) {
-		pr_err("error during decryption: %d\n", ret);
+		pr_err_ratelimited("%s: error during decryption: %d\n", __func__, ret);
 		goto drop;
 	}
 
@@ -280,7 +250,7 @@ void ovpn_decrypt_work(struct work_struct *work)
 
 	peer = container_of(work, struct ovpn_peer, decrypt_work);
 	while ((skb = __ptr_ring_consume(&peer->rx_ring))) {
-		if (ovpn_decrypt_one(peer, skb) == 0) {
+		if (likely(ovpn_decrypt_one(peer, skb) == 0)) {
 			/* if a packet has been enqueued for NAPI, signal
 			 * availability to the networking stack
 			 */
@@ -305,7 +275,7 @@ static bool ovpn_encrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 	/* get primary key to be used for encrypting data */
 	ks = ovpn_crypto_key_slot_primary(&peer->crypto);
 	if (unlikely(!ks)) {
-		pr_err("error while retrieving primary key slot\n");
+		pr_info_ratelimited("%s: error while retrieving primary key slot\n", __func__);
 		return false;
 	}
 
@@ -313,13 +283,15 @@ static bool ovpn_encrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 	OVPN_SKB_CB(skb)->pktid = 0;
 
 	if (unlikely(skb->ip_summed == CHECKSUM_PARTIAL &&
-		     skb_checksum_help(skb)))
+		     skb_checksum_help(skb))) {
+		pr_err_ratelimited("%s: cannot compute checksum for outgoing packet\n", __func__);
 		goto err;
+	}
 
 	/* encrypt */
 	ret = ks->ops->encrypt(ks, skb);
 	if (unlikely(ret < 0)) {
-		pr_err("error during encryption: %d\n", ret);
+		pr_err_ratelimited("%s: error during encryption: %d\n", __func__, ret);
 		goto err;
 	}
 
@@ -349,7 +321,7 @@ void ovpn_encrypt_work(struct work_struct *work)
 			 * packet, because it does not really make sense to send
 			 * only part of it at this point
 			 */
-			if (!ovpn_encrypt_one(peer, curr)) {
+			if (unlikely(!ovpn_encrypt_one(peer, curr))) {
 				kfree_skb_list(skb);
 				skb = NULL;
 				break;
@@ -392,12 +364,16 @@ static void ovpn_queue_skb(struct ovpn_struct *ovpn, struct sk_buff *skb)
 	int ret;
 
 	peer = ovpn_peer_get(ovpn);
-	if (unlikely(!peer))
+	if (unlikely(!peer)) {
+		pr_info_ratelimited("%s: no peer to send data to\n", __func__);
 		goto drop;
+	}
 
 	ret = __ptr_ring_produce(&peer->tx_ring, skb);
-	if (ret < 0)
+	if (unlikely(ret < 0)) {
+		pr_err_ratelimited("%s: cannot queue packet to TX ring\n", __func__);
 		goto drop;
+	}
 
 	if (!queue_work(ovpn->crypto_wq, &peer->encrypt_work))
 		ovpn_peer_put(peer);
@@ -433,6 +409,7 @@ netdev_tx_t ovpn_net_xmit(struct sk_buff *skb, struct net_device *dev)
 		segments = skb_gso_segment(skb, 0);
 		if (IS_ERR(segments)) {
 			ret = PTR_ERR(segments);
+			net_dbg_ratelimited("%s: cannot segment packet: %d\n", dev->name, ret);
 			goto drop;
 		}
 
@@ -449,6 +426,7 @@ netdev_tx_t ovpn_net_xmit(struct sk_buff *skb, struct net_device *dev)
 		tmp = skb_share_check(curr, GFP_ATOMIC);
 		if (unlikely(!tmp)) {
 			kfree_skb_list(next);
+			net_dbg_ratelimited("%s: skb_share_check failed\n", dev->name);
 			goto drop_list;
 		}
 
@@ -533,7 +511,7 @@ int ovpn_send_data(struct ovpn_struct *ovpn, const u8 *data, size_t len)
 	}
 
 	peer = ovpn_peer_get(ovpn);
-	if (!peer) {
+	if (unlikely(!peer)) {
 		pr_debug("no peer to send data to\n");
 		return -EHOSTUNREACH;
 	}

@@ -53,7 +53,7 @@ static int ovpn_none_encrypt(struct ovpn_crypto_key_slot *ks, struct sk_buff *sk
 	*((__force __be32 *)skb->data) = htonl(pktid);
 
 	/* add packet op as head of additional data */
-	op = ovpn_op32_compose(OVPN_DATA_V2, ks->key_id, ks->remote_peer_id);
+	op = ovpn_opcode_compose(OVPN_DATA_V2, ks->key_id, ks->remote_peer_id);
 	__skb_push(skb, OVPN_OP_SIZE_V2);
 	BUILD_BUG_ON(sizeof(op) != OVPN_OP_SIZE_V2);
 	*((__force __be32 *)skb->data) = htonl(op);
@@ -61,10 +61,9 @@ static int ovpn_none_encrypt(struct ovpn_crypto_key_slot *ks, struct sk_buff *sk
 	return 0;
 }
 
-static int ovpn_none_decrypt(struct ovpn_crypto_key_slot *ks, struct sk_buff *skb, unsigned int op)
+static int ovpn_none_decrypt(struct ovpn_crypto_key_slot *ks, struct sk_buff *skb)
 {
 	const u32 payload_offset = ovpn_none_encap_overhead(ks);
-	const u32 opsize = OVPN_OP_SIZE_V2;
 	int payload_len, ret;
 	__be32 *pid;
 
@@ -74,7 +73,7 @@ static int ovpn_none_decrypt(struct ovpn_crypto_key_slot *ks, struct sk_buff *sk
 		return -EINVAL;
 
 	/* PID sits after the op */
-	pid = (__force __be32 *)(skb->data + opsize);
+	pid = (__force __be32 *)(skb->data + OVPN_OP_SIZE_V2);
 	ret = ovpn_pktid_recv(&ks->pid_recv, ntohl(*pid), 0);
 	if (unlikely(ret < 0))
 		return ret;

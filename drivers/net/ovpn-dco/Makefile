@@ -8,7 +8,6 @@
 
 obj-m += ovpn-dco.o
 ovpn-dco-y += main.o
-ovpn-dco-y += addr.o
 ovpn-dco-y += bind.o
 ovpn-dco-y += crypto.o
 ovpn-dco-y += ovpn.o
