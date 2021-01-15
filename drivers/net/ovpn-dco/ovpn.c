@@ -153,6 +153,23 @@ int ovpn_napi_poll(struct napi_struct *napi, int budget)
 	return work_done;
 }
 
+static int ovpn_transport_to_userspace(struct ovpn_struct *ovpn,
+				       struct sk_buff *skb)
+{
+	int ret;
+
+	ret = skb_linearize(skb);
+	if (ret < 0)
+		return ret;
+
+	ret = ovpn_netlink_send_packet(ovpn, skb->data, skb->len);
+	if (ret < 0)
+		return ret;
+
+	consume_skb(skb);
+	return 0;
+}
+
 /* Entry point for processing an incoming packet (in skb form)
  *
  * Enqueue the packet and schedule RX consumer.
@@ -270,7 +287,9 @@ static int ovpn_decrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 		if (ovpn_is_keepalive(skb)) {
 			pr_info("ping received\n");
 			/* not an error */
-			consume_skb(skb);
+			ret = ovpn_transport_to_userspace(peer->ovpn, skb);
+			if (ret < 0)
+				consume_skb(skb);
 			/* inform the caller that NAPI should not be scheduled
 			 * for this packet
 			 */
