@@ -83,6 +83,7 @@ int ovpn_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
 
 	/* only DATA_V2 packets are handled in kernel space, the rest goes to user space */
 	if (unlikely(ovpn_opcode_from_skb(skb, sizeof(struct udphdr)) != OVPN_DATA_V2)) {
+		pr_info("not DATA_V2, pass to userspace\n");
 		return 1;
 	}
 
@@ -98,7 +99,7 @@ int ovpn_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
 	/* lookup peer */
 	peer = ovpn_lookup_peer_via_transport(ovpn, skb);
 	if (unlikely(!peer)) {
-		pr_debug_ratelimited("%s: packet received from unknown peer\n", __func__);
+		pr_info_ratelimited("%s: packet received from unknown peer\n", __func__);
 		goto drop;
 	}
 
@@ -111,6 +112,9 @@ int ovpn_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
 	/* should this be a non DATA_V2 packet, ret will be >0 and this will instruct the UDP
 	 * stack to continue processing this packet as usual (i.e. deliver to user space)
 	 */
+
+	pr_info("recv returned %d\n", ret);
+
 	return ret;
 
 drop:
@@ -153,6 +157,7 @@ static int ovpn_udp4_output(struct ovpn_struct *ovpn, struct ovpn_bind *bind,
 	dst_cache_set_ip4(cache, &rt->dst, fl.saddr);
 
 transmit:
+	pr_info("udp_tunnel_xmit_skb\n");
 	udp_tunnel_xmit_skb(rt, sk, skb, fl.saddr, fl.daddr, 0,
 			    ip4_dst_hoplimit(&rt->dst), 0, fl.fl4_sport,
 			    fl.fl4_dport, false, sk->sk_no_check_tx);
@@ -252,7 +257,7 @@ void ovpn_udp_send_skb(struct ovpn_struct *ovpn, struct ovpn_peer *peer,
 	/* get socket info */
 	sock = peer->sock;
 	if (unlikely(!sock)) {
-		pr_debug_ratelimited("%s: no sock for remote peer\n", __func__);
+		pr_info_ratelimited("%s: no sock for remote peer\n", __func__);
 		goto out;
 	}
 
@@ -260,7 +265,7 @@ void ovpn_udp_send_skb(struct ovpn_struct *ovpn, struct ovpn_peer *peer,
 	/* get binding */
 	bind = rcu_dereference(peer->bind);
 	if (unlikely(!bind)) {
-		pr_debug_ratelimited("%s: no bind for remote peer\n", __func__);
+		pr_info_ratelimited("%s: no bind for remote peer\n", __func__);
 		goto out_unlock;
 	}
 
@@ -269,6 +274,8 @@ void ovpn_udp_send_skb(struct ovpn_struct *ovpn, struct ovpn_peer *peer,
 
 	/* crypto layer -> transport (UDP) */
 	ret = ovpn_udp_output(ovpn, bind, &peer->dst_cache, sock->sk, skb);
+
+	pr_info("udp_output %d\n", ret);
 
 out_unlock:
 	rcu_read_unlock();

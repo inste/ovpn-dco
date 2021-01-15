@@ -4,6 +4,8 @@ ifneq ($(KERNELRELEASE),)
 
 NOSTDINC_FLAGS += -I$(SUBDIRS)/include/
 
+ccflags-y += -DDEBUG=1
+
 obj-m			:= ovpn-dco.o
 ovpn-dco-y		+= drivers/net/ovpn-dco/main.o
 ovpn-dco-y		+= drivers/net/ovpn-dco/bind.o

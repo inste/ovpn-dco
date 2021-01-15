@@ -118,6 +118,8 @@ static void tun_netdev_write(struct ovpn_peer *peer, struct sk_buff *skb)
 	/* we are in softirq context - hence no locking nor disable preemption needed */
 	dev_sw_netstats_rx_add(peer->ovpn->dev, OVPN_SKB_CB(skb)->rx_stats_size);
 
+	pr_info("do napi_gro_recv %s\n", peer->ovpn->dev->name);
+
 	/* cause packet to be "received" by tun interface */
 	napi_gro_receive(&peer->napi, skb);
 }
@@ -173,6 +175,20 @@ int ovpn_recv(struct ovpn_struct *ovpn, struct ovpn_peer *peer, struct sk_buff *
 	return 0;
 }
 
+static void hexdump(const char* pfx, const unsigned char *buf, unsigned int len)
+{
+	print_hex_dump(KERN_CONT, pfx, DUMP_PREFIX_OFFSET,
+			16, 1,
+			buf, len, false);
+}
+
+#define LZO_COMPRESS_BYTE 0x66
+#define LZ4_COMPRESS_BYTE 0x69
+#define NO_COMPRESS_BYTE      0xFA
+#define NO_COMPRESS_BYTE_SWAP 0xFB /* to maintain payload alignment, replace this byte with last byte of packet */
+/* V2 on wire code */
+#define COMP_ALGV2_INDICATOR_BYTE       0x50
+
 static int ovpn_decrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 {
 	struct ovpn_crypto_key_slot *ks;
@@ -191,6 +207,8 @@ static int ovpn_decrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 		goto drop;
 	}
 
+	pr_info("dec one keyid %d\n", key_id);
+
 	/* decrypt */
 	ret = ks->ops->decrypt(ks, skb);
 
@@ -208,6 +226,34 @@ static int ovpn_decrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 	rx_stats_size = OVPN_SKB_CB(skb)->rx_stats_size;
 	ovpn_peer_stats_increment_rx(peer, rx_stats_size);
 
+
+	/* check if null packet */
+	if (unlikely(!pskb_may_pull(skb, 1))) {
+		ret = -EINVAL;
+		goto drop;
+	}
+
+	if (skb->data[0] == NO_COMPRESS_BYTE)
+		__skb_pull(skb, 1);
+	else
+	if (skb->data[0] == NO_COMPRESS_BYTE_SWAP) {
+		u8 _end;
+		const u8 *endp = skb_header_pointer(skb, skb->len - 1, sizeof(_end), &_end);
+
+		if (unlikely(endp == NULL)) {
+			pr_err_ratelimited("%s: unable to obtain last byte of packet\n", __func__);
+			goto drop;
+		}
+
+		skb->data[0] = *endp;
+	} else
+	if (unlikely(skb->data[0] == LZO_COMPRESS_BYTE ||
+			skb->data[0] == LZ4_COMPRESS_BYTE ||
+			skb->data[0] == COMP_ALGV2_INDICATOR_BYTE)) {
+		pr_err("%s: compression %u is not supported\n", __func__, (unsigned)(skb->data[0]));
+		goto drop;
+	}
+
 	/* check if this is a valid datapacket that has to be delivered to the
 	 * tun interface
 	 */
@@ -222,7 +268,7 @@ static int ovpn_decrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 
 		/* check if special OpenVPN message */
 		if (ovpn_is_keepalive(skb)) {
-			pr_debug("ping received\n");
+			pr_info("ping received\n");
 			/* not an error */
 			consume_skb(skb);
 			/* inform the caller that NAPI should not be scheduled
@@ -231,8 +277,14 @@ static int ovpn_decrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 			return -1;
 		}
 
+		pr_info("ip header not found\n");
+
+		hexdump("recv ", skb->data, skb->len);
+
 		goto drop;
 	}
+
+	pr_info("decrypt one done\n");
 
 	ret = __ptr_ring_produce(&peer->netif_rx_ring, skb);
 drop:
@@ -272,6 +324,8 @@ static bool ovpn_encrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 	bool success = false;
 	int ret;
 
+	pr_info("encrypt_one\n");
+
 	/* get primary key to be used for encrypting data */
 	ks = ovpn_crypto_key_slot_primary(&peer->crypto);
 	if (unlikely(!ks)) {
@@ -288,12 +342,22 @@ static bool ovpn_encrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 		goto err;
 	}
 
+	if (unlikely(skb_headroom(skb) < 1)) {
+		pr_err("%s: no headroom available\n", __func__);
+		goto err;
+	}
+
+	skb_push(skb, 1);
+	skb->data[0] = NO_COMPRESS_BYTE;
+
 	/* encrypt */
 	ret = ks->ops->encrypt(ks, skb);
 	if (unlikely(ret < 0)) {
 		pr_err_ratelimited("%s: error during encryption: %d\n", __func__, ret);
 		goto err;
 	}
+
+	pr_info("encrypt_one done\n");
 
 	success = true;
 err:
@@ -336,6 +400,7 @@ void ovpn_encrypt_work(struct work_struct *work)
 				switch (peer->ovpn->proto) {
 				case OVPN_PROTO_UDP4:
 				case OVPN_PROTO_UDP6:
+					pr_info("send udp skb\n");
 					ovpn_udp_send_skb(peer->ovpn, peer, curr);
 					break;
 				case OVPN_PROTO_TCP4:
@@ -394,6 +459,8 @@ netdev_tx_t ovpn_net_xmit(struct sk_buff *skb, struct net_device *dev)
 	struct sk_buff_head skb_list;
 	int ret;
 
+	pr_info("ovpn_net_xmit %s\n", dev->name);
+
 	/* reset netfilter state */
 	nf_reset_ct(skb);
 
@@ -435,6 +502,8 @@ netdev_tx_t ovpn_net_xmit(struct sk_buff *skb, struct net_device *dev)
 	skb_list.prev->next = NULL;
 
 	ovpn_queue_skb(ovpn, skb_list.next);
+
+	pr_info("queued\n");
 
 	return NETDEV_TX_OK;
 
@@ -512,7 +581,7 @@ int ovpn_send_data(struct ovpn_struct *ovpn, const u8 *data, size_t len)
 
 	peer = ovpn_peer_get(ovpn);
 	if (unlikely(!peer)) {
-		pr_debug("no peer to send data to\n");
+		pr_info("no peer to send data to\n");
 		return -EHOSTUNREACH;
 	}
 

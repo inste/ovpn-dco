@@ -187,6 +187,13 @@ free_req:
 	return ret;
 }
 
+static void hexdump(const char* pfx, const unsigned char *buf, unsigned int len)
+{
+	print_hex_dump(KERN_CONT, pfx, DUMP_PREFIX_OFFSET,
+			16, 1,
+			buf, len, false);
+}
+
 static int ovpn_aead_decrypt(struct ovpn_crypto_key_slot *ks, struct sk_buff *skb)
 {
 	const unsigned int tag_size = crypto_aead_authsize(ks->decrypt);
@@ -202,6 +209,8 @@ static int ovpn_aead_decrypt(struct ovpn_crypto_key_slot *ks, struct sk_buff *sk
 
 	payload_offset = OVPN_OP_SIZE_V2 + NONCE_WIRE_SIZE + tag_size;
 	payload_len = skb->len - payload_offset;
+
+	hexdump("before dec ", skb->data, skb->len);
 
 	/* sanity check on packet size, payload size must be >= 0 */
 	if (unlikely(payload_len < 0))
@@ -269,7 +278,7 @@ static int ovpn_aead_decrypt(struct ovpn_crypto_key_slot *ks, struct sk_buff *sk
 	/* decrypt it */
 	ret = crypto_wait_req(crypto_aead_decrypt(req), &wait);
 	if (ret < 0) {
-		pr_err_ratelimited("%s: decrypt failed: %d\n", __func__, ret);
+		pr_err_ratelimited("%s: decrypt failed: %d %d %d %d\n", __func__, ret, EBADMSG, EINPROGRESS, EBUSY);
 		goto free_req;
 	}
 
@@ -278,6 +287,10 @@ static int ovpn_aead_decrypt(struct ovpn_crypto_key_slot *ks, struct sk_buff *sk
 	ret = ovpn_pktid_recv(&ks->pid_recv, ntohl(*pid), 0);
 	if (unlikely(ret < 0))
 		goto free_req;
+
+	hexdump("dec ", skb->data, skb->len);
+
+	pr_info("poff=%d, len=%d\n", payload_offset, skb->len);
 
 	/* point to encapsulated IP packet */
 	__skb_pull(skb, payload_offset);
@@ -318,12 +331,12 @@ static struct crypto_aead *ovpn_aead_init(const char *title,
 		goto error;
 	}
 
-	pr_debug("********* Cipher %s (%s)\n", alg_name, title);
-	pr_debug("*** IV size=%u\n", crypto_aead_ivsize(aead));
-	pr_debug("*** req size=%u\n", crypto_aead_reqsize(aead));
-	pr_debug("*** block size=%u\n", crypto_aead_blocksize(aead));
-	pr_debug("*** auth size=%u\n", crypto_aead_authsize(aead));
-	pr_debug("*** alignmask=0x%x\n", crypto_aead_alignmask(aead));
+	pr_info("********* Cipher %s (%s)\n", alg_name, title);
+	pr_info("*** IV size=%u\n", crypto_aead_ivsize(aead));
+	pr_info("*** req size=%u\n", crypto_aead_reqsize(aead));
+	pr_info("*** block size=%u\n", crypto_aead_blocksize(aead));
+	pr_info("*** auth size=%u\n", crypto_aead_authsize(aead));
+	pr_info("*** alignmask=0x%x\n", crypto_aead_alignmask(aead));
 
 	return aead;
 

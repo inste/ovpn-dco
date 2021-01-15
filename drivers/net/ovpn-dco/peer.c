@@ -35,7 +35,7 @@ static void ovpn_peer_ping(struct timer_list *t)
 	struct ovpn_peer *peer = from_timer(peer, t, keepalive_xmit);
 
 	rcu_read_lock();
-	pr_debug("sending ping to peer %pIScp\n", &rcu_dereference(peer->bind)->sa);
+	pr_info("sending ping to peer %pIScp\n", &rcu_dereference(peer->bind)->sa);
 	rcu_read_unlock();
 
 	ovpn_keepalive_xmit(peer);
@@ -67,7 +67,7 @@ static void ovpn_peer_expire(struct timer_list *t)
 	struct ovpn_peer *peer = from_timer(peer, t, keepalive_recv);
 
 	rcu_read_lock();
-	pr_debug("peer expired: %pIScp\n", &rcu_dereference(peer->bind)->sa);
+	pr_info("peer expired: %pIScp\n", &rcu_dereference(peer->bind)->sa);
 	rcu_read_unlock();
 
 	ovpn_peer_evict(peer, OVPN_DEL_PEER_REASON_EXPIRED);
@@ -286,7 +286,7 @@ void ovpn_peer_keepalive_set(struct ovpn_peer *peer, u32 interval, u32 timeout)
 	u32 delta;
 
 	rcu_read_lock();
-	pr_debug("scheduling keepalive for %pIScp: interval=%u timeout=%u\n",
+	pr_info("scheduling keepalive for %pIScp: interval=%u timeout=%u\n",
 		 &rcu_dereference(peer->bind)->sa, interval, timeout);
 	rcu_read_unlock();
 

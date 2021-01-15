@@ -89,7 +89,7 @@ int ovpn_crypto_state_reset(struct ovpn_crypto_state *cs,
 		goto free_key;
 	}
 
-	pr_debug("*** NEW KEY INSTALLED id=%u remote_pid=%u\n",
+	pr_info("*** NEW KEY INSTALLED id=%u remote_pid=%u\n",
 		 new->key_id, new->remote_peer_id);
 
 	if (old)
@@ -123,10 +123,10 @@ void ovpn_crypto_key_slot_delete(struct ovpn_crypto_state *cs,
 	mutex_unlock(&cs->mutex);
 
 	if (!ks) {
-		pr_debug("Key slot already released: %u\n", slot);
+		pr_info("Key slot already released: %u\n", slot);
 		return;
 	}
-	pr_debug("deleting key slot %u, key_id=%u\n", slot, ks->key_id);
+	pr_info("deleting key slot %u, key_id=%u\n", slot, ks->key_id);
 
 	ovpn_crypto_key_slot_put(ks);
 }
@@ -197,7 +197,7 @@ void ovpn_crypto_key_slots_swap(struct ovpn_crypto_state *cs)
 					  lockdep_is_held(&cs->mutex));
 	rcu_assign_pointer(cs->secondary, old_primary);
 
-	pr_debug("key swapped: %u <-> %u\n",
+	pr_info("key swapped: %u <-> %u\n",
 		 old_primary ? old_primary->key_id : 0,
 		 old_secondary ? old_secondary->key_id : 0);
 

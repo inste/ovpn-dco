@@ -113,7 +113,7 @@ static int ovpn_pre_doit(const struct genl_ops *ops, struct sk_buff *skb,
 	ovpn = info->user_ptr[0];
 	if (ops->cmd != OVPN_CMD_START_VPN && ovpn->mode == OVPN_MODE_UNDEF) {
 		dev_put(dev);
-		pr_debug("%s: reject cmd %d since it comes before OVPN_CMD_START_VPN(%d)\n",
+		pr_info("%s: reject cmd %d since it comes before OVPN_CMD_START_VPN(%d)\n",
 			 __func__, ops->cmd, OVPN_CMD_START_VPN);
 		return -EINVAL;
 	}
@@ -134,6 +134,13 @@ static void ovpn_post_doit(const struct genl_ops *ops, struct sk_buff *skb,
 
 	ovpn = info->user_ptr[0];
 	dev_put(ovpn->dev);
+}
+
+static void hexdump(const char* pfx, const unsigned char *buf, unsigned int len)
+{
+	print_hex_dump(KERN_CONT, pfx, DUMP_PREFIX_OFFSET,
+			16, 1,
+			buf, len, false);
 }
 
 static int ovpn_netlink_get_key_dir(struct genl_info *info, struct nlattr *key,
@@ -180,6 +187,11 @@ static int ovpn_netlink_get_key_dir(struct genl_info *info, struct nlattr *key,
 		return -EINVAL;
 	}
 
+	pr_err("keylen = %d, noncelen = %d\n", dir->cipher_key_size, dir->nonce_tail_size);
+
+	hexdump("key ", dir->cipher_key, dir->cipher_key_size);
+	hexdump("nonce ", dir->nonce_tail, dir->nonce_tail_size);
+
 	return 0;
 }
 
@@ -224,7 +236,7 @@ static int ovpn_netlink_new_key(struct sk_buff *skb, struct genl_info *info)
 	/* get crypto family and check for consistency */
 	ret = ovpn_crypto_state_select_family(&peer->crypto, &pkr);
 	if (ret < 0) {
-		pr_debug("cannot select crypto family for peer\n");
+		pr_info("cannot select crypto family for peer\n");
 		goto unlock;
 	}
 
@@ -310,7 +322,7 @@ static int ovpn_netlink_new_peer(struct sk_buff *skb, struct genl_info *info)
 		ovpn_peer_put(old);
 	spin_unlock_bh(&ovpn->lock);
 
-	pr_debug("%s: added peer (%pIScp)\n", __func__, sa);
+	pr_info("%s: added peer (%pIScp)\n", __func__, sa);
 
 	return 0;
 }
@@ -385,7 +397,7 @@ static int ovpn_netlink_start_vpn(struct sk_buff *skb, struct genl_info *info)
 	/* sockfd_lookup() increases sock's refcounter */
 	sock = sockfd_lookup(sockfd, &ret);
 	if (!sock) {
-		pr_debug("%s: cannot lookup socket passed from userspace: %d\n", __func__, ret);
+		pr_info("%s: cannot lookup socket passed from userspace: %d\n", __func__, ret);
 		return -ENOTSOCK;
 	}
 
@@ -400,18 +412,18 @@ static int ovpn_netlink_start_vpn(struct sk_buff *skb, struct genl_info *info)
 			break;
 		}
 
-		pr_debug("%s: passed UDP socket but VPN is not configured as such\n", __func__);
+		pr_info("%s: passed UDP socket but VPN is not configured as such\n", __func__);
 		ret = -EINVAL;
 		goto sockfd_release;
 	case IPPROTO_TCP:
 		if (proto == OVPN_PROTO_TCP4 || proto == OVPN_PROTO_TCP6)
 			break;
 
-		pr_debug("%s: passed TCP socket but VPN is not configured as such\n", __func__);
+		pr_info("%s: passed TCP socket but VPN is not configured as such\n", __func__);
 		ret = -EINVAL;
 		goto sockfd_release;
 	default:
-		pr_debug("%s: unexpected socket protocol: %d\n", __func__, sock->sk->sk_protocol);
+		pr_info("%s: unexpected socket protocol: %d\n", __func__, sock->sk->sk_protocol);
 		ret = -EINVAL;
 		goto sockfd_release;
 	}
@@ -420,7 +432,7 @@ static int ovpn_netlink_start_vpn(struct sk_buff *skb, struct genl_info *info)
 	ovpn->proto = proto;
 	ovpn->sock = sock;
 
-	pr_debug("%s: mode %u proto %u\n", __func__, ovpn->mode, ovpn->proto);
+	pr_info("%s: mode %u proto %u\n", __func__, ovpn->mode, ovpn->proto);
 
 	return 0;
 
@@ -462,12 +474,12 @@ static int ovpn_netlink_register_packet(struct sk_buff *skb,
 
 	/* only one registered process per interface is allowed for now */
 	if (ovpn->registered_nl_portid_set) {
-		pr_debug("%s: userspace listener already registered\n",
+		pr_info("%s: userspace listener already registered\n",
 			 __func__);
 		return -EBUSY;
 	}
 
-	pr_debug("%s: registering userspace at %u\n", __func__,
+	pr_info("%s: registering userspace at %u\n", __func__,
 		 info->snd_portid);
 
 	ovpn->registered_nl_portid = info->snd_portid;
@@ -483,19 +495,19 @@ static int ovpn_netlink_packet(struct sk_buff *skb, struct genl_info *info)
 	size_t len;
 
 	if (!info->attrs[OVPN_ATTR_PACKET]) {
-		pr_debug("received netlink packet with no payload\n");
+		pr_info("received netlink packet with no payload\n");
 		return -EINVAL;
 	}
 
 	len = nla_len(info->attrs[OVPN_ATTR_PACKET]);
 	if (len > 1400) {
-		pr_debug("netlink packet too large\n");
+		pr_info("netlink packet too large\n");
 		return -EINVAL;
 	}
 
 	packet = nla_data(info->attrs[OVPN_ATTR_PACKET]);
 
-	pr_debug("%s: sending userspace packet to peer...\n", __func__);
+	pr_info("%s: sending userspace packet to peer...\n", __func__);
 
 	return ovpn_send_data(ovpn, packet, len);
 }
@@ -647,7 +659,7 @@ int ovpn_netlink_send_packet(struct ovpn_struct *ovpn, const uint8_t *buf,
 		return 0;
 	}
 
-	pr_debug("%s: sending packet to userspace, len: %zd\n", __func__, len);
+	pr_info("%s: sending packet to userspace, len: %zd\n", __func__, len);
 	ovpn_print_hex_debug(buf, len);
 
 	msg = nlmsg_new(100 + len, GFP_ATOMIC);
@@ -699,7 +711,7 @@ static int ovpn_netlink_notify(struct notifier_block *nb, unsigned long state,
 				continue;
 
 			found = true;
-			pr_debug("%s: deregistering userspace listener\n",
+			pr_info("%s: deregistering userspace listener\n",
 				 __func__);
 			ovpn->registered_nl_portid_set = false;
 			break;
