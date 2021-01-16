@@ -38,6 +38,7 @@ struct ovpn_struct {
 	struct socket *sock;
 	enum ovpn_mode mode;
 	enum ovpn_proto proto;
+	enum ovpn_data_format data_format;
 
 	unsigned int max_tun_queue_len;
 

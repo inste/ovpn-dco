@@ -15,6 +15,14 @@
 
 #define OVPN_NL_MULTICAST_GROUP_PEERS "peers"
 
+#ifndef P_DATA_V1
+#define P_DATA_V1                      6     /* data channel packet */
+#endif
+
+#ifndef P_DATA_V2
+#define P_DATA_V2                      9     /* data channel packet with peer-id */
+#endif
+
 /**
  * enum ovpn_nl_commands - supported netlink commands
  */
@@ -67,6 +75,11 @@ enum ovpn_nl_commands {
 	 * with OVPN_CMD_REGISTER_PACKET
 	 */
 	OVPN_CMD_PACKET,
+};
+
+enum ovpn_data_format {
+	OVPN_P_DATA_V1 = P_DATA_V1,
+	OVPN_P_DATA_V2 = P_DATA_V2
 };
 
 enum ovpn_mode {
@@ -132,6 +145,7 @@ enum ovpn_attrs {
 	OVPN_ATTR_MODE,
 	OVPN_ATTR_SOCKET,
 	OVPN_ATTR_PROTO,
+	OVPN_ATTR_DATA_FORMAT,
 
 	OVPN_ATTR_REMOTE_PEER_ID,
 

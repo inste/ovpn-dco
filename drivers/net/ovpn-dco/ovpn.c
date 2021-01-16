@@ -118,8 +118,6 @@ static void tun_netdev_write(struct ovpn_peer *peer, struct sk_buff *skb)
 	/* we are in softirq context - hence no locking nor disable preemption needed */
 	dev_sw_netstats_rx_add(peer->ovpn->dev, OVPN_SKB_CB(skb)->rx_stats_size);
 
-	pr_info("do napi_gro_recv %s\n", peer->ovpn->dev->name);
-
 	/* cause packet to be "received" by tun interface */
 	napi_gro_receive(&peer->napi, skb);
 }
@@ -213,6 +211,13 @@ static int ovpn_decrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 	int ret = -1;
 	u8 key_id;
 
+/*	const u8 opcode = ovpn_opcode_from_skb(skb, 0);
+
+	if (unlikely(opcode != peer->ovpn->data_format)) {
+		pr_info_ratelimited("%s: unexpected data format: %d (exp: %d)\n", __func__, opcode, peer->ovpn->data_format);
+		goto drop;
+	} */
+
 	/* save original packet size for stats accounting */
 	OVPN_SKB_CB(skb)->rx_stats_size = skb->len;
 
@@ -223,8 +228,6 @@ static int ovpn_decrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 		pr_info_ratelimited("%s: no available key for this ID: %d\n", __func__, key_id);
 		goto drop;
 	}
-
-	pr_info("dec one keyid %d\n", key_id);
 
 	/* decrypt */
 	ret = ks->ops->decrypt(ks, skb);
@@ -242,7 +245,6 @@ static int ovpn_decrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 	/* increment RX stats */
 	rx_stats_size = OVPN_SKB_CB(skb)->rx_stats_size;
 	ovpn_peer_stats_increment_rx(peer, rx_stats_size);
-
 
 	/* check if null packet */
 	if (unlikely(!pskb_may_pull(skb, 1))) {
@@ -303,8 +305,6 @@ static int ovpn_decrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 		goto drop;
 	}
 
-	pr_info("decrypt one done\n");
-
 	ret = __ptr_ring_produce(&peer->netif_rx_ring, skb);
 drop:
 	if (unlikely(ret < 0))
@@ -343,8 +343,6 @@ static bool ovpn_encrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 	bool success = false;
 	int ret;
 
-	pr_info("encrypt_one\n");
-
 	/* get primary key to be used for encrypting data */
 	ks = ovpn_crypto_key_slot_primary(&peer->crypto);
 	if (unlikely(!ks)) {
@@ -370,13 +368,11 @@ static bool ovpn_encrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 	skb->data[0] = NO_COMPRESS_BYTE;
 
 	/* encrypt */
-	ret = ks->ops->encrypt(ks, skb);
+	ret = ks->ops->encrypt(ks, skb, peer->ovpn->data_format);
 	if (unlikely(ret < 0)) {
 		pr_err_ratelimited("%s: error during encryption: %d\n", __func__, ret);
 		goto err;
 	}
-
-	pr_info("encrypt_one done\n");
 
 	success = true;
 err:
@@ -419,7 +415,6 @@ void ovpn_encrypt_work(struct work_struct *work)
 				switch (peer->ovpn->proto) {
 				case OVPN_PROTO_UDP4:
 				case OVPN_PROTO_UDP6:
-					pr_info("send udp skb\n");
 					ovpn_udp_send_skb(peer->ovpn, peer, curr);
 					break;
 				case OVPN_PROTO_TCP4:
@@ -478,8 +473,6 @@ netdev_tx_t ovpn_net_xmit(struct sk_buff *skb, struct net_device *dev)
 	struct sk_buff_head skb_list;
 	int ret;
 
-	pr_info("ovpn_net_xmit %s\n", dev->name);
-
 	/* reset netfilter state */
 	nf_reset_ct(skb);
 
@@ -521,8 +514,6 @@ netdev_tx_t ovpn_net_xmit(struct sk_buff *skb, struct net_device *dev)
 	skb_list.prev->next = NULL;
 
 	ovpn_queue_skb(ovpn, skb_list.next);
-
-	pr_info("queued\n");
 
 	return NETDEV_TX_OK;
 

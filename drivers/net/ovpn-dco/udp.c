@@ -73,6 +73,7 @@ int ovpn_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
 {
 	struct ovpn_peer *peer = NULL;
 	struct ovpn_struct *ovpn;
+	u8 opcode = 0;
 	int ret;
 
 	/* Make sure the first byte of the skb data buffer after the UDP header is accessible.
@@ -81,9 +82,11 @@ int ovpn_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
 	if (unlikely(!pskb_may_pull(skb, sizeof(struct udphdr) + 1)))
 		return -ENODATA;
 
-	/* only DATA_V2 packets are handled in kernel space, the rest goes to user space */
-	if (unlikely(ovpn_opcode_from_skb(skb, sizeof(struct udphdr)) != OVPN_DATA_V2)) {
-		pr_info("not DATA_V2, pass to userspace\n");
+	/* only DATA_V1/V2 packets are handled in kernel space, the rest goes to user space */
+	opcode = ovpn_opcode_from_skb(skb, sizeof(struct udphdr));
+
+	if (unlikely(opcode != OVPN_DATA_V2 && opcode != OVPN_DATA_V1)) {
+		pr_info("not DATA_V1/V2, pass to userspace\n");
 		return 1;
 	}
 
@@ -112,8 +115,6 @@ int ovpn_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
 	/* should this be a non DATA_V2 packet, ret will be >0 and this will instruct the UDP
 	 * stack to continue processing this packet as usual (i.e. deliver to user space)
 	 */
-
-	pr_info("recv returned %d\n", ret);
 
 	return ret;
 
@@ -157,7 +158,6 @@ static int ovpn_udp4_output(struct ovpn_struct *ovpn, struct ovpn_bind *bind,
 	dst_cache_set_ip4(cache, &rt->dst, fl.saddr);
 
 transmit:
-	pr_info("udp_tunnel_xmit_skb\n");
 	udp_tunnel_xmit_skb(rt, sk, skb, fl.saddr, fl.daddr, 0,
 			    ip4_dst_hoplimit(&rt->dst), 0, fl.fl4_sport,
 			    fl.fl4_dport, false, sk->sk_no_check_tx);
@@ -274,8 +274,6 @@ void ovpn_udp_send_skb(struct ovpn_struct *ovpn, struct ovpn_peer *peer,
 
 	/* crypto layer -> transport (UDP) */
 	ret = ovpn_udp_output(ovpn, bind, &peer->dst_cache, sock->sk, skb);
-
-	pr_info("udp_output %d\n", ret);
 
 out_unlock:
 	rcu_read_unlock();

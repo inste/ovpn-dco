@@ -87,4 +87,11 @@ static inline u32 ovpn_opcode_compose(u8 opcode, u8 key_id, u32 peer_id)
 	return (op << 24) | (peer_id & 0x00FFFFFF);
 }
 
+static inline u8 ovpn_opcode_compose_v1(u8 opcode, u8 key_id)
+{
+	const u8 op = (opcode << OVPN_OPCODE_SHIFT) | (key_id & OVPN_KEY_ID_MASK);
+
+	return op;
+}
+
 #endif /* _NET_OVPN_DCO_OVPNPROTO_H_ */

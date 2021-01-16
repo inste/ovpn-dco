@@ -17,15 +17,15 @@
 
 const struct ovpn_crypto_ops ovpn_none_ops;
 
-static int ovpn_none_encap_overhead(const struct ovpn_crypto_key_slot *ks)
+static int ovpn_none_encap_overhead(const struct ovpn_crypto_key_slot *ks, enum ovpn_data_format data_format)
 {
 	return  OVPN_OP_SIZE_V2 +			/* OP header size */
 		sizeof(u32);				/* Packet ID */
 }
 
-static int ovpn_none_encrypt(struct ovpn_crypto_key_slot *ks, struct sk_buff *skb)
+static int ovpn_none_encrypt(struct ovpn_crypto_key_slot *ks, struct sk_buff *skb, enum ovpn_data_format data_format)
 {
-	const u32 head_size = ovpn_none_encap_overhead(ks);
+	const u32 head_size = ovpn_none_encap_overhead(ks, data_format);
 	u32 pktid, op;
 	int ret;
 
@@ -63,7 +63,7 @@ static int ovpn_none_encrypt(struct ovpn_crypto_key_slot *ks, struct sk_buff *sk
 
 static int ovpn_none_decrypt(struct ovpn_crypto_key_slot *ks, struct sk_buff *skb)
 {
-	const u32 payload_offset = ovpn_none_encap_overhead(ks);
+	const u32 payload_offset = ovpn_none_encap_overhead(ks, OVPN_P_DATA_V2);
 	int payload_len, ret;
 	__be32 *pid;
 

@@ -45,6 +45,7 @@ static const struct nla_policy ovpn_netlink_policy[OVPN_ATTR_MAX + 1] = {
 	[OVPN_ATTR_MODE] = { .type = NLA_U8 },
 	[OVPN_ATTR_SOCKET] = { .type = NLA_U32 },
 	[OVPN_ATTR_PROTO] = { .type = NLA_U8 },
+	[OVPN_ATTR_DATA_FORMAT] = { .type = NLA_U8 },
 	[OVPN_ATTR_REMOTE_PEER_ID] = { .type = NLA_U32 },
 	[OVPN_ATTR_KEY_SLOT] = NLA_POLICY_RANGE(NLA_U8, __OVPN_KEY_SLOT_FIRST,
 						__OVPN_KEY_SLOT_AFTER_LAST - 1),
@@ -365,13 +366,15 @@ static int ovpn_netlink_start_vpn(struct sk_buff *skb, struct genl_info *info)
 	struct ovpn_struct *ovpn = info->user_ptr[0];
 	enum ovpn_proto proto;
 	enum ovpn_mode mode;
+	enum ovpn_data_format data_format;
 	struct socket *sock;
 	u32 sockfd;
 	int ret;
 
 	if (!info->attrs[OVPN_ATTR_SOCKET] ||
 	    !info->attrs[OVPN_ATTR_MODE] ||
-	    !info->attrs[OVPN_ATTR_PROTO])
+	    !info->attrs[OVPN_ATTR_PROTO] ||
+	    !info->attrs[OVPN_ATTR_DATA_FORMAT])
 		return -EINVAL;
 
 	if (ovpn->sock)
@@ -379,6 +382,11 @@ static int ovpn_netlink_start_vpn(struct sk_buff *skb, struct genl_info *info)
 
 	mode = nla_get_u8(info->attrs[OVPN_ATTR_MODE]);
 	if (mode != OVPN_MODE_CLIENT)
+		return -EOPNOTSUPP;
+
+	data_format = nla_get_u8(info->attrs[OVPN_ATTR_DATA_FORMAT]);
+	if (data_format != OVPN_P_DATA_V1 &&
+		data_format != OVPN_P_DATA_V2)
 		return -EOPNOTSUPP;
 
 	proto = nla_get_u8(info->attrs[OVPN_ATTR_PROTO]);
@@ -431,6 +439,7 @@ static int ovpn_netlink_start_vpn(struct sk_buff *skb, struct genl_info *info)
 	ovpn->mode = mode;
 	ovpn->proto = proto;
 	ovpn->sock = sock;
+	ovpn->data_format = data_format;
 
 	pr_info("%s: mode %u proto %u\n", __func__, ovpn->mode, ovpn->proto);
 
