@@ -439,6 +439,7 @@ void ovpn_encrypt_work(struct work_struct *work)
 /* Put skb into TX queue and schedule a consumer */
 static void ovpn_queue_skb(struct ovpn_struct *ovpn, struct sk_buff *skb)
 {
+	struct sk_buff *pskb;
 	struct ovpn_peer *peer;
 	int ret;
 
@@ -446,6 +447,13 @@ static void ovpn_queue_skb(struct ovpn_struct *ovpn, struct sk_buff *skb)
 	if (unlikely(!peer)) {
 		pr_info_ratelimited("%s: no peer to send data to\n", __func__);
 		goto drop;
+	}
+
+	if (unlikely(__ptr_ring_full(&peer->tx_ring))) {
+		if (likely(pskb = __ptr_ring_consume(&peer->tx_ring)))
+			kfree_skb_list(pskb);
+
+		pr_err_ratelimited("%s: dropping packet from TX ring\n", __func__);
 	}
 
 	ret = __ptr_ring_produce(&peer->tx_ring, skb);

@@ -54,7 +54,7 @@ void ovpn_release_lock(struct kref *kref);
 #define OVPN_HEAD_ROOM ALIGN(16 + SKB_HEADER_LEN, 4)
 #define OVPN_MAX_PADDING 16
 
-#define OVPN_QUEUE_LEN 1024
+#define OVPN_QUEUE_LEN 128
 
 /* max allowed parameter values */
 #define OVPN_MAX_PEERS                1000000

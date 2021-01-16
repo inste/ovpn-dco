@@ -25,7 +25,6 @@ void ovpn_pktid_recv_init(struct ovpn_pktid_recv *pr)
 }
 
 #if ENABLE_REPLAY_PROTECTION
-#err
 /* Packet replay detection.
  * Allows ID backtrack of up to REPLAY_WINDOW_SIZE - 1.
  */
