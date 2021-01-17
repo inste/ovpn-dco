@@ -211,13 +211,6 @@ static int ovpn_decrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 	int ret = -1;
 	u8 key_id;
 
-/*	const u8 opcode = ovpn_opcode_from_skb(skb, 0);
-
-	if (unlikely(opcode != peer->ovpn->data_format)) {
-		pr_info_ratelimited("%s: unexpected data format: %d (exp: %d)\n", __func__, opcode, peer->ovpn->data_format);
-		goto drop;
-	} */
-
 	/* save original packet size for stats accounting */
 	OVPN_SKB_CB(skb)->rx_stats_size = skb->len;
 
@@ -286,7 +279,8 @@ static int ovpn_decrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 		}
 
 		/* check if special OpenVPN message */
-		if (ovpn_is_keepalive(skb)) {
+		if (unlikely(ovpn_is_keepalive(skb))) {
+			peer->keepalive_recv_last = jiffies;
 			pr_info("ping received\n");
 			/* not an error */
 			ret = ovpn_transport_to_userspace(peer->ovpn, skb);
@@ -303,6 +297,19 @@ static int ovpn_decrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 		hexdump("recv ", skb->data, skb->len);
 
 		goto drop;
+	}
+
+	if (unlikely(
+			peer->keepalive_interval > 0 &&
+			time_after(jiffies,
+				peer->keepalive_recv_last +
+				msecs_to_jiffies(peer->keepalive_interval * MSEC_PER_SEC / 2)))) {
+		ret = ovpn_netlink_send_packet(peer->ovpn,
+			ovpn_keepalive_message, sizeof(ovpn_keepalive_message));
+		peer->keepalive_recv_last = jiffies;
+
+		if (unlikely(ret < 0))
+			pr_err_ratelimited("unable to ping userspace\n");
 	}
 
 	ret = __ptr_ring_produce(&peer->netif_rx_ring, skb);
@@ -364,7 +371,7 @@ static bool ovpn_encrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 		goto err;
 	}
 
-	skb_push(skb, 1);
+	__skb_push(skb, 1);
 	skb->data[0] = NO_COMPRESS_BYTE;
 
 	/* encrypt */
@@ -447,13 +454,6 @@ static void ovpn_queue_skb(struct ovpn_struct *ovpn, struct sk_buff *skb)
 	if (unlikely(!peer)) {
 		pr_info_ratelimited("%s: no peer to send data to\n", __func__);
 		goto drop;
-	}
-
-	if (unlikely(__ptr_ring_full(&peer->tx_ring))) {
-		if (likely(pskb = __ptr_ring_consume(&peer->tx_ring)))
-			kfree_skb_list(pskb);
-
-		pr_err_ratelimited("%s: dropping packet from TX ring\n", __func__);
 	}
 
 	ret = __ptr_ring_produce(&peer->tx_ring, skb);

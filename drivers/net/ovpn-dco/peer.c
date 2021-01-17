@@ -153,6 +153,8 @@ static struct ovpn_peer *ovpn_peer_new(struct ovpn_struct *ovpn)
 	timer_setup(&peer->keepalive_xmit, ovpn_peer_ping, 0);
 	timer_setup(&peer->keepalive_recv, ovpn_peer_expire, 0);
 
+	peer->keepalive_recv_last = jiffies;
+
 	return peer;
 err_tcp_tx_ring:
 	ptr_ring_cleanup(&peer->tcp.tx_ring, NULL);
@@ -239,6 +241,8 @@ static void ovpn_peer_delete_work(struct work_struct *work)
 void ovpn_peer_release_kref(struct kref *kref)
 {
 	struct ovpn_peer *peer = container_of(kref, struct ovpn_peer, refcount);
+
+	pr_err("RELEASE PEER\n");
 
 	INIT_WORK(&peer->delete_work, ovpn_peer_delete_work);
 	queue_work(peer->ovpn->events_wq, &peer->delete_work);

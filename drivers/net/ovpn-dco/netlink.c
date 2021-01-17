@@ -559,7 +559,6 @@ static const struct genl_ops ovpn_netlink_ops[] = {
 #if LINUX_VERSION_CODE > KERNEL_VERSION(5, 2, 0)
 		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
 #endif
-		.flags = GENL_ADMIN_PERM,
 		.doit = ovpn_netlink_new_key,
 	},
 	{
@@ -575,7 +574,6 @@ static const struct genl_ops ovpn_netlink_ops[] = {
 #if LINUX_VERSION_CODE > KERNEL_VERSION(5, 2, 0)
 		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
 #endif
-		.flags = GENL_ADMIN_PERM,
 		.doit = ovpn_netlink_swap_keys,
 	},
 	{

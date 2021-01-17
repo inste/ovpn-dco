@@ -77,6 +77,8 @@ struct ovpn_peer {
 	/* keepalive timeout in seconds */
 	unsigned long keepalive_timeout;
 
+	unsigned int keepalive_recv_last;
+
 	/* true if ovpn_peer_mark_delete was called */
 	bool halt;
 

@@ -182,7 +182,7 @@ ovpn_keys_familiy_get(const struct ovpn_key_config *kc)
 }
 
 /* this swap is not atomic, but there will be a very short time frame where the
- * old_secondary key won't be available. This should not be a big deal as most
+ * old_primary key won't be available. This should not be a big deal as most
  * likely both peers are already using the new primary at this point.
  */
 void ovpn_crypto_key_slots_swap(struct ovpn_crypto_state *cs)
@@ -191,11 +191,11 @@ void ovpn_crypto_key_slots_swap(struct ovpn_crypto_state *cs)
 
 	mutex_lock(&cs->mutex);
 
-	old_secondary = rcu_dereference_protected(cs->secondary,
+	old_primary = rcu_dereference_protected(cs->primary,
 						  lockdep_is_held(&cs->mutex));
-	old_primary = rcu_replace_pointer(cs->primary, old_secondary,
+	old_secondary = rcu_replace_pointer(cs->secondary, old_primary,
 					  lockdep_is_held(&cs->mutex));
-	rcu_assign_pointer(cs->secondary, old_primary);
+	rcu_assign_pointer(cs->primary, old_secondary);
 
 	pr_info("key swapped: %u <-> %u\n",
 		 old_primary ? old_primary->key_id : 0,
