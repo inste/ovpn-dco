@@ -18,6 +18,7 @@
 #include "skb.h"
 #include "tcp.h"
 #include "udp.h"
+#include "fragment.h"
 
 #include <linux/workqueue.h>
 #include <uapi/linux/if_ether.h>
@@ -239,6 +240,24 @@ static int ovpn_decrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 	rx_stats_size = OVPN_SKB_CB(skb)->rx_stats_size;
 	ovpn_peer_stats_increment_rx(peer, rx_stats_size);
 
+	if (peer->ovpn->fragment_size != 0) {
+		struct sk_buff *skb2;
+
+		if (unlikely(!pskb_may_pull(skb, sizeof(uint32_t)))) {
+			ret = -EINVAL;
+			goto drop;
+		}
+
+		ret = ovpn_defragment_one(peer, skb, &skb2);
+		if (unlikely(ret < 0))
+			return ret;
+
+		if (skb2 == NULL)
+			return 1;
+
+		skb = skb2;
+	}
+
 	/* check if null packet */
 	if (unlikely(!pskb_may_pull(skb, 1))) {
 		ret = -EINVAL;
@@ -366,14 +385,6 @@ static bool ovpn_encrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 		goto err;
 	}
 
-	if (unlikely(skb_headroom(skb) < 1)) {
-		pr_err("%s: no headroom available\n", __func__);
-		goto err;
-	}
-
-	__skb_push(skb, 1);
-	skb->data[0] = NO_COMPRESS_BYTE;
-
 	/* encrypt */
 	ret = ks->ops->encrypt(ks, skb, peer->ovpn->data_format);
 	if (unlikely(ret < 0)) {
@@ -396,27 +407,70 @@ void ovpn_encrypt_work(struct work_struct *work)
 {
 	struct sk_buff *skb, *curr, *next;
 	struct ovpn_peer *peer;
+	int ret;
 
 	peer = container_of(work, struct ovpn_peer, encrypt_work);
 	while ((skb = __ptr_ring_consume(&peer->tx_ring))) {
+		struct sk_buff_head skb_list;
+
+		__skb_queue_head_init(&skb_list);
+
+		skb_list_walk_safe(skb, curr, next) {
+			skb_mark_not_on_list(curr);
+			if (unlikely(skb_headroom(curr) < 1)) {
+				pr_err_ratelimited("%s: no headroom available\n", __func__);
+				kfree_skb_list(next);
+				skb_queue_walk_safe(&skb_list, curr, next)
+					kfree_skb(curr);
+				skb = NULL;
+				break;
+			}
+
+			__skb_push(curr, 1);
+			curr->data[0] = NO_COMPRESS_BYTE;
+
+			__skb_queue_tail(&skb_list, curr);
+		}
+
+		if (unlikely(skb == NULL))
+			break;
+
+		if (peer->ovpn->fragment_size != 0) {
+			skb_queue_walk_safe(&skb_list, curr, next) {
+				ret = ovpn_fragment_one(peer, &skb_list, curr,
+					peer->ovpn->fragment_size);
+				if (ret <= 0) {
+					skb_queue_walk_safe(&skb_list, curr, next)
+						kfree_skb(curr);
+					skb = NULL;
+					break;
+				}
+			}
+
+			if (unlikely(skb == NULL))
+				break;
+		}
+
 		/* this might be a GSO-segmented skb list: process each skb
 		 * independently
 		 */
-		skb_list_walk_safe(skb, curr, next) {
+		skb_queue_walk_safe(&skb_list, curr, next) {
 			/* if one segment fails encryption, we drop the entire
 			 * packet, because it does not really make sense to send
 			 * only part of it at this point
 			 */
+
 			if (unlikely(!ovpn_encrypt_one(peer, curr))) {
-				kfree_skb_list(skb);
+				skb_queue_walk_safe(&skb_list, curr, next)
+					kfree_skb(curr);
 				skb = NULL;
 				break;
 			}
 		}
 
 		/* successful encryption */
-		if (skb) {
-			skb_list_walk_safe(skb, curr, next) {
+		if (likely(skb)) {
+			skb_queue_walk_safe(&skb_list, curr, next) {
 				skb_mark_not_on_list(curr);
 
 				switch (peer->ovpn->proto) {
@@ -446,7 +500,6 @@ void ovpn_encrypt_work(struct work_struct *work)
 /* Put skb into TX queue and schedule a consumer */
 static void ovpn_queue_skb(struct ovpn_struct *ovpn, struct sk_buff *skb)
 {
-	struct sk_buff *pskb;
 	struct ovpn_peer *peer;
 	int ret;
 

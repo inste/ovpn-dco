@@ -46,6 +46,7 @@ static const struct nla_policy ovpn_netlink_policy[OVPN_ATTR_MAX + 1] = {
 	[OVPN_ATTR_SOCKET] = { .type = NLA_U32 },
 	[OVPN_ATTR_PROTO] = { .type = NLA_U8 },
 	[OVPN_ATTR_DATA_FORMAT] = { .type = NLA_U8 },
+	[OVPN_ATTR_FRAGMENT_SIZE] = { .type = NLA_U16 },
 	[OVPN_ATTR_REMOTE_PEER_ID] = { .type = NLA_U32 },
 	[OVPN_ATTR_KEY_SLOT] = NLA_POLICY_RANGE(NLA_U8, __OVPN_KEY_SLOT_FIRST,
 						__OVPN_KEY_SLOT_AFTER_LAST - 1),
@@ -369,6 +370,7 @@ static int ovpn_netlink_start_vpn(struct sk_buff *skb, struct genl_info *info)
 	enum ovpn_data_format data_format;
 	struct socket *sock;
 	u32 sockfd;
+	u16 fragment_size = 0;
 	int ret;
 
 	if (!info->attrs[OVPN_ATTR_SOCKET] ||
@@ -399,6 +401,9 @@ static int ovpn_netlink_start_vpn(struct sk_buff *skb, struct genl_info *info)
 	default:
 		return -EOPNOTSUPP;
 	}
+
+	if (info->attrs[OVPN_ATTR_FRAGMENT_SIZE])
+		fragment_size = nla_get_u16(info->attrs[OVPN_ATTR_FRAGMENT_SIZE]);
 
 	/* lookup the fd in the kernel table and extract the socket object */
 	sockfd = nla_get_u32(info->attrs[OVPN_ATTR_SOCKET]);
@@ -440,6 +445,7 @@ static int ovpn_netlink_start_vpn(struct sk_buff *skb, struct genl_info *info)
 	ovpn->proto = proto;
 	ovpn->sock = sock;
 	ovpn->data_format = data_format;
+	ovpn->fragment_size = fragment_size;
 
 	pr_info("%s: mode %u proto %u\n", __func__, ovpn->mode, ovpn->proto);
 

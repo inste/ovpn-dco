@@ -14,6 +14,7 @@
 #include "bind.h"
 #include "sock.h"
 #include "stats.h"
+#include "fragment.h"
 
 #include <linux/timer.h>
 #include <linux/ptr_ring.h>
@@ -87,6 +88,12 @@ struct ovpn_peer {
 
 	/* why peer was deleted - keepalive timeout, module removed etc */
 	enum ovpn_del_peer_reason delete_reason;
+
+	spinlock_t frag_tx;
+	int frag_tx_seq_id;
+
+	spinlock_t frag_rx;
+	struct ovpn_fragment *frag_queue;
 
 	/* protects binding to peer (bind) and timers
 	 * (keepalive_xmit, keepalive_expire)

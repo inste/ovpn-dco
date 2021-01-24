@@ -13,6 +13,9 @@
 #include <linux/types.h>
 #include <net/ip_tunnels.h>
 
+#define OVPN_NEW_SIZE		(256)
+#define OVPN_NEW_HEADROOM	(128)
+
 #define OVPN_SKB_CB(skb) ((struct ovpn_skb_cb *)&((skb)->cb))
 
 struct ovpn_skb_cb {
@@ -53,5 +56,6 @@ static inline int ovpn_ip_header_probe(struct sk_buff *skb)
 	skb->protocol = proto;
 	return 0;
 }
+
 
 #endif /* _NET_OVPN_DCO_SKB_H_ */

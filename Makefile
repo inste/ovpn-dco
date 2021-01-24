@@ -20,6 +20,7 @@ ovpn-dco-y		+= drivers/net/ovpn-dco/crypto_aead.o
 ovpn-dco-y		+= drivers/net/ovpn-dco/pktid.o
 ovpn-dco-y		+= drivers/net/ovpn-dco/tcp.o
 ovpn-dco-y		+= drivers/net/ovpn-dco/udp.o
+ovpn-dco-y		+= drivers/net/ovpn-dco/fragment.o
 
 else
 

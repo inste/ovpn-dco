@@ -16,6 +16,8 @@
 
 #include <linux/timer.h>
 #include <linux/workqueue.h>
+#include <linux/vmalloc.h>
+#include <linux/random.h>
 
 struct ovpn_peer *ovpn_peer_get(struct ovpn_struct *ovpn)
 {
@@ -84,11 +86,24 @@ static struct ovpn_peer *ovpn_peer_new(struct ovpn_struct *ovpn)
 	if (!peer)
 		return ERR_PTR(-ENOMEM);
 
+	if (ovpn->fragment_size != 0) {
+		peer->frag_queue =
+			vzalloc(sizeof(*(peer->frag_queue)) * MAX_FRAGS * MAX_SEQ);
+		if (!peer) {
+			kfree(peer);
+			return ERR_PTR(-ENOMEM);
+		}
+	}
+
+	peer->frag_tx_seq_id = prandom_u32() & (MAX_SEQ - 1);
+
 	peer->halt = false;
 	peer->ovpn = ovpn;
 	RCU_INIT_POINTER(peer->bind, NULL);
 	ovpn_crypto_state_init(&peer->crypto);
 	spin_lock_init(&peer->lock);
+	spin_lock_init(&peer->frag_tx);
+	spin_lock_init(&peer->frag_rx);
 	kref_init(&peer->refcount);
 	ovpn_peer_stats_init(&peer->stats);
 
@@ -210,6 +225,10 @@ void ovpn_peer_release(struct ovpn_peer *peer)
 	dst_cache_destroy(&peer->dst_cache);
 
 	dev_put(peer->ovpn->dev);
+
+	ovpn_defrag_queue_cleanup(peer);
+
+	vfree(peer->frag_queue);
 
 	kfree(peer);
 }
