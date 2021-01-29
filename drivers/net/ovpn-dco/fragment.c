@@ -124,7 +124,7 @@ int ovpn_fragment_one(struct ovpn_peer *peer, struct sk_buff_head *head,
 	struct scatterlist sg[MAX_SKB_FRAGS];
 	int nfrags;
 	const int frag_size = ovpn_fragment_optimal_fragment_size(
-		skb->len, max_len + sizeof(uint32_t));
+		skb->len, max_len);
 
 	if (unlikely(skb_cow_head(skb, sizeof(uint32_t))))
 		return -ENOBUFS;
@@ -219,7 +219,7 @@ int ovpn_fragment_one(struct ovpn_peer *peer, struct sk_buff_head *head,
 					    last ? FRAG_YES_LAST : FRAG_YES_NOTLAST,
 					    seq_id,
 					    frag_id++,
-					    last ? (to_copy + sizeof(uint32_t)) : 0);
+					    last ? frag_size : 0);
 
 		__skb_queue_after(head, skb2, new);
 		skb2 = new;
