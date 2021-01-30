@@ -54,6 +54,7 @@ static const struct nla_policy ovpn_netlink_policy[OVPN_ATTR_MAX + 1] = {
 						       __OVPN_DEL_PEER_REASON_FIRST,
 						       __OVPN_DEL_PEER_REASON_AFTER_LAST - 1),
 	[OVPN_ATTR_CIPHER_ALG] = { .type = NLA_U16 },
+	[OVPN_ATTR_HMAC_ALG] = { .type = NLA_U16 },
 	[OVPN_ATTR_ENCRYPT_KEY] =
 		NLA_POLICY_NESTED(ovpn_netlink_policy_key_dir),
 	[OVPN_ATTR_DECRYPT_KEY] =
@@ -147,6 +148,7 @@ static void hexdump(const char* pfx, const unsigned char *buf, unsigned int len)
 
 static int ovpn_netlink_get_key_dir(struct genl_info *info, struct nlattr *key,
 				    enum ovpn_cipher_alg cipher,
+				    enum ovpn_hmac_alg hmac,
 				    struct ovpn_key_direction *dir)
 {
 	struct nlattr *attr, *attrs[OVPN_KEY_DIR_ATTR_MAX + 1];
@@ -160,6 +162,8 @@ static int ovpn_netlink_get_key_dir(struct genl_info *info, struct nlattr *key,
 			       );
 	if (ret)
 		return ret;
+
+	memset(dir, 0, sizeof(*dir));
 
 	switch (cipher) {
 	case OVPN_CIPHER_ALG_AES_GCM:
@@ -183,7 +187,30 @@ static int ovpn_netlink_get_key_dir(struct genl_info *info, struct nlattr *key,
 		dir->nonce_tail = nla_data(attr);
 		dir->nonce_tail_size = nla_len(attr);
 		break;
+	case OVPN_CIPHER_ALG_AES_CBC:
+		attr = attrs[OVPN_KEY_DIR_ATTR_CIPHER_KEY];
+		if (!attr)
+			return -EINVAL;
+
+		dir->cipher_key = nla_data(attr);
+		dir->cipher_key_size = nla_len(attr);
+		break;
 	case OVPN_CIPHER_ALG_NONE:
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	switch (hmac) {
+	case OVPN_HMAC_ALG_SHA1:
+		attr = attrs[OVPN_KEY_DIR_ATTR_HMAC_KEY];
+		if (!attr)
+			return -EINVAL;
+
+		dir->hmac_key = nla_data(attr);
+		dir->hmac_key_size = nla_len(attr);
+		break;
+	case OVPN_HMAC_ALG_NONE:
 		break;
 	default:
 		return -EINVAL;
@@ -192,7 +219,15 @@ static int ovpn_netlink_get_key_dir(struct genl_info *info, struct nlattr *key,
 	pr_err("keylen = %d, noncelen = %d\n", dir->cipher_key_size, dir->nonce_tail_size);
 
 	hexdump("key ", dir->cipher_key, dir->cipher_key_size);
-	hexdump("nonce ", dir->nonce_tail, dir->nonce_tail_size);
+
+	if (hmac != OVPN_HMAC_ALG_NONE) {
+		pr_err("hmaclen = %d\n", dir->hmac_key_size);
+
+		hexdump("key ", dir->hmac_key, dir->hmac_key_size);
+	} else
+	{
+		hexdump("nonce ", dir->nonce_tail, dir->nonce_tail_size);
+	}
 
 	return 0;
 }
@@ -217,18 +252,24 @@ static int ovpn_netlink_new_key(struct sk_buff *skb, struct genl_info *info)
 	pkr.key.key_id = nla_get_u16(info->attrs[OVPN_ATTR_KEY_ID]);
 
 	pkr.key.cipher_alg = nla_get_u16(info->attrs[OVPN_ATTR_CIPHER_ALG]);
+	pkr.key.hmac_alg =
+		info->attrs[OVPN_ATTR_HMAC_ALG] ?
+			nla_get_u16(info->attrs[OVPN_ATTR_HMAC_ALG]) :
+			OVPN_HMAC_ALG_NONE;
 
 	ret = ovpn_netlink_get_key_dir(info, info->attrs[OVPN_ATTR_ENCRYPT_KEY],
-				       pkr.key.cipher_alg, &pkr.key.encrypt);
+				       pkr.key.cipher_alg, pkr.key.hmac_alg,
+				       &pkr.key.encrypt);
 	if (ret < 0)
 		return ret;
 
 	ret = ovpn_netlink_get_key_dir(info, info->attrs[OVPN_ATTR_DECRYPT_KEY],
-				       pkr.key.cipher_alg, &pkr.key.decrypt);
+				       pkr.key.cipher_alg, pkr.key.hmac_alg,
+				       &pkr.key.decrypt);
 	if (ret < 0)
 		return ret;
 
-	pkr.crypto_family = ovpn_keys_familiy_get(&pkr.key);
+	pkr.crypto_family = ovpn_keys_family_get(&pkr.key);
 
 	peer = ovpn_peer_get(ovpn);
 	if (!peer)

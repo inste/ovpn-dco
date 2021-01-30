@@ -23,6 +23,7 @@ enum ovpn_crypto_families {
 	OVPN_CRYPTO_FAMILY_UNDEF = 0,
 	OVPN_CRYPTO_FAMILY_NONE,
 	OVPN_CRYPTO_FAMILY_AEAD,
+	OVPN_CRYPTO_FAMILY_CBC
 };
 
 /* info needed for both encrypt and decrypt directions */
@@ -31,11 +32,14 @@ struct ovpn_key_direction {
 	size_t cipher_key_size;
 	const u8 *nonce_tail; /* only needed for GCM modes */
 	size_t nonce_tail_size; /* only needed for GCM modes */
+	const u8 *hmac_key;
+	size_t hmac_key_size;
 };
 
 /* all info for a particular symmetric key (primary or secondary) */
 struct ovpn_key_config {
 	enum ovpn_cipher_alg cipher_alg;
+	enum ovpn_hmac_alg hmac_alg;
 	u8 key_id;
 	struct ovpn_key_direction encrypt;
 	struct ovpn_key_direction decrypt;
@@ -59,16 +63,20 @@ struct ovpn_crypto_ops {
 	int (*encap_overhead)(const struct ovpn_crypto_key_slot *ks, enum ovpn_data_format data_format);
 };
 
+#define MAX_AUTHENC_IV_SIZE	16 /* max iv must be the same as max blocksize */ 
+
 struct ovpn_crypto_key_slot {
 	const struct ovpn_crypto_ops *ops;
 	int remote_peer_id;
 	u8 key_id;
 
 	enum ovpn_cipher_alg alg;
+	enum ovpn_hmac_alg hmac_alg;
 	struct crypto_aead *encrypt;
 	struct crypto_aead *decrypt;
 	struct ovpn_nonce_tail nonce_tail_xmit;
 	struct ovpn_nonce_tail nonce_tail_recv;
+	u8 xmit_iv[MAX_AUTHENC_IV_SIZE];
 
 	struct ovpn_pktid_recv pid_recv ____cacheline_aligned_in_smp;
 	struct ovpn_pktid_xmit pid_xmit ____cacheline_aligned_in_smp;
@@ -164,7 +172,7 @@ void ovpn_crypto_key_slot_delete(struct ovpn_crypto_state *cs,
 void ovpn_crypto_state_release(struct ovpn_crypto_state *cs);
 
 enum ovpn_crypto_families
-ovpn_keys_familiy_get(const struct ovpn_key_config *kc);
+ovpn_keys_family_get(const struct ovpn_key_config *kc);
 
 void ovpn_crypto_key_slots_swap(struct ovpn_crypto_state *cs);
 
