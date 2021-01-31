@@ -60,32 +60,6 @@ static int ovpn_cbc_encap_overhead(const struct ovpn_crypto_key_slot *ks, enum o
 		crypto_aead_authsize(ks->encrypt);	/* hmac len */
 }
 
-static u8 *ovpn_cbc_iv_set(struct ovpn_crypto_key_slot *ks, u8 *iv)
-{
-	u8 *iv_ptr;
-
-	/* In AEAD mode OpenVPN creates a nonce of 12 bytes made up of 4 bytes packet ID
-	 * concatenated with 8 bytes key material coming from userspace.
-	 *
-	 * For AES-GCM and CHACHAPOLY the IV is 12 bytes and coincides with the OpenVPN nonce.
-	 * For AES-CCM the IV is 16 bytes long and is constructed following the instructions
-	 * in RFC3610
-	 */
-
-	switch(ks->alg) {
-	case OVPN_CIPHER_ALG_AES_CBC:
-		BUILD_BUG_ON(MAX_AUTHENC_IV_SIZE < 8);
-		BUILD_BUG_ON(MAX_AUTHENC_IV_SIZE > 16);
-		iv_ptr = iv;
-
-		break;
-	default:
-		return NULL;
-	}
-
-	return iv_ptr;
-}
-
 static inline unsigned int ovpn_cbc_min(const unsigned int a,
 					const unsigned int b)
 {
@@ -105,7 +79,7 @@ static int ovpn_cbc_encrypt(struct ovpn_crypto_key_slot *ks,
 	const unsigned int tag_size = crypto_aead_authsize(ks->encrypt);
 	const unsigned int head_size = ovpn_cbc_encap_overhead(ks, data_format);
 	struct scatterlist sg[MAX_SKB_FRAGS + 2];
-	u8 *iv_ptr;
+	u8 iv[MAX_AUTHENC_IV_SIZE];
 	DECLARE_CRYPTO_WAIT(wait);
 	struct aead_request *req;
 	struct sk_buff *trailer;
@@ -113,10 +87,14 @@ static int ovpn_cbc_encrypt(struct ovpn_crypto_key_slot *ks,
 	u32 pktid, op;
 	u8 op8;
 	u8 *tail;
+	unsigned int i;
 	const u8 opcode_size =
 		(data_format == OVPN_P_DATA_V1 ? OVPN_OP_SIZE_V1 : OVPN_OP_SIZE_V2);
-	const unsigned int tailroom = ALIGN(skb->len + sizeof(uint32_t), block_size) -
+	unsigned int tailroom = ALIGN(skb->len + sizeof(uint32_t), block_size) -
 		(skb->len + sizeof(uint32_t));
+
+	if (tailroom == 0)
+		tailroom += block_size;
 
 	/* Sample CBC header format:
 	 * 48000001 00000005 7e7046bd 444a7e28 cc6387b1 64a4d6c1 380275ab abcdef10 aabb...
@@ -162,16 +140,12 @@ static int ovpn_cbc_encrypt(struct ovpn_crypto_key_slot *ks,
 	__skb_push(skb, sizeof(uint32_t));
 	ovpn_pktid_chm_write(pktid, skb->data);
 
-	if (tailroom > 0) {
-		unsigned int i;
+	tail = skb_tail_pointer(trailer);
 
-		tail = skb_tail_pointer(trailer);
+	for (i = 0; i < tailroom; ++i)
+		tail[i] = (u8)tailroom;
 
-		for (i = 0; i < tailroom; ++i)
-			tail[i] = (u8)tailroom;
-
-		pskb_put(skb, trailer, tailroom);
-	}
+	pskb_put(skb, trailer, tailroom);
 
 	/* build scatterlist to encrypt packet payload */
 	ret = skb_to_sgvec_nomark(skb, sg + 1, 0, skb->len);
@@ -180,18 +154,22 @@ static int ovpn_cbc_encrypt(struct ovpn_crypto_key_slot *ks,
 		goto free_req;
 	}
 
-	crypto_inc_(ks->xmit_iv, iv_size);
+	/* echainiv */
+	i = iv_size;
 
-	iv_ptr = ovpn_cbc_iv_set(ks, ks->xmit_iv);
-	if (unlikely(!iv_ptr)) {
-		ret = -EOPNOTSUPP;
-		goto free_req;
-	}
+	do {
+		u64 a;
 
-	(*(u32 *)iv_ptr) ^= pktid;
+		memcpy(&a, ks->xmit_iv_salt + i - 8, 8);
+
+		a |= 1;
+		a *= pktid;
+
+		memcpy(iv + i - 8, &a, 8);
+	} while ((i -= 8));
 
 	__skb_push(skb, iv_size);
-	memcpy(skb->data, iv_ptr, iv_size);
+	memcpy(skb->data, iv, iv_size);
 
 	/* prepend IV onto scatterlist */
 	/* as AEAD Additional data */
@@ -222,7 +200,7 @@ static int ovpn_cbc_encrypt(struct ovpn_crypto_key_slot *ks,
 				  crypto_req_done, &wait);
 	aead_request_set_crypt(req, sg, sg,
 			       skb->len - opcode_size - iv_size - tag_size,
-			       iv_ptr);
+			       iv);
 	aead_request_set_ad(req, iv_size);
 
 	/* encrypt it */
@@ -246,7 +224,8 @@ static int ovpn_cbc_decrypt(struct ovpn_crypto_key_slot *ks, struct sk_buff *skb
 {
 	const unsigned int iv_size = crypto_aead_ivsize(ks->decrypt);
 	const unsigned int tag_size = crypto_aead_authsize(ks->decrypt);
-	u8 *iv_ptr, iv[MAX_AUTHENC_IV_SIZE] = { 0 };
+	const unsigned int block_size = crypto_aead_blocksize(ks->decrypt);
+	u8 *iv_ptr;
 	struct scatterlist sg[MAX_SKB_FRAGS + 2];
 	int ret, payload_len, nfrags;
 	unsigned int payload_offset;
@@ -304,20 +283,14 @@ static int ovpn_cbc_decrypt(struct ovpn_crypto_key_slot *ks, struct sk_buff *skb
 		skb->data + opcode_size,
 		tag_size);
 
-	iv_ptr = ovpn_cbc_iv_set(ks, iv);
-	if (unlikely(!iv_ptr)) {
-		ret = -EOPNOTSUPP;
-		goto free_req;
-	}
-
-	memcpy(iv_ptr, skb->data + opcode_size + tag_size, iv_size);
+	iv_ptr = skb->data + opcode_size + tag_size;
 
 	/* setup async crypto operation */
 	aead_request_set_tfm(req, ks->decrypt);
 	aead_request_set_callback(req, CRYPTO_TFM_REQ_MAY_BACKLOG |
 				       CRYPTO_TFM_REQ_MAY_SLEEP,
 				  crypto_req_done, &wait);
-	aead_request_set_crypt(req, sg, sg, payload_len + tag_size, iv);
+	aead_request_set_crypt(req, sg, sg, payload_len + tag_size, iv_ptr);
 
 	aead_request_set_ad(req, iv_size);
 
@@ -328,41 +301,45 @@ static int ovpn_cbc_decrypt(struct ovpn_crypto_key_slot *ks, struct sk_buff *skb
 		goto free_req;
 	}
 
+	if (skb->len < block_size) {
+		pr_err_ratelimited("%s: invalid packet size\n", __func__);
+		goto free_req;
+	}
+
 	do {
-		const unsigned int block_size = crypto_aead_blocksize(ks->decrypt);
-		const unsigned int pad = ovpn_cbc_min_s(skb->len, block_size);
-		u8 pv, *p = skb_header_pointer(skb, skb->len - pad, pad, &iv);
+		u8 _block[MAX_AUTHENC_IV_SIZE];
+		u8 pv, *p = skb_header_pointer(skb,
+					       skb->len - block_size,
+					       block_size, &_block);
+		int i = 0;
 
 		if (p == NULL) {
 			pr_err_ratelimited("%s: pad handling failed\n", __func__);
 			goto free_req;
 		}
 
-		pv = p[pad - 1];
+		pv = p[block_size - 1];
 
-		if (pv <= pad && pv < block_size && pv > 0) {
-			int i;
-			int pad_valid = 1;
+		if (pv == 0 || pv > block_size) {
+			pr_err_ratelimited("%s: invalid padding\n", __func__);
+			goto free_req;
+		}
 
-			for (i = pad - 1; i > pad - 1 - pv; --i) {
-				if (p[i] != pv) {
-					pad_valid = 0;
-					break;
-				}
-			}
-
-			if (pad_valid) {
-				ret = skb_linearize(skb);
-				if (ret < 0) {
-					pr_err_ratelimited(
-						"%s: unable to linearize padded skb\n", __func__);
-
-					goto free_req;
-				}
-
-				skb_trim(skb, skb->len - pv);
+		for (i = block_size - 1; i > block_size - 1 - pv; --i) {
+			if (p[i] != pv) {
+				pr_err_ratelimited("%s: invalid padding value\n", __func__);
+				goto free_req;
 			}
 		}
+
+		ret = skb_linearize(skb);
+		if (ret < 0) {
+			pr_err_ratelimited("%s: unable to linearize padded skb\n", __func__);
+
+			goto free_req;
+		}
+
+		skb_trim(skb, skb->len - pv);
 
 	} while(0);
 
@@ -567,7 +544,7 @@ ovpn_cbc_crypto_key_slot_init(enum ovpn_cipher_alg alg,
 		goto destroy_ks;
 	}
 
-	get_random_bytes(&ks->xmit_iv, MAX_AUTHENC_IV_SIZE);
+	get_random_bytes(&ks->xmit_iv_salt, MAX_AUTHENC_IV_SIZE);
 
 	/* init packet ID generation/validation */
 	ovpn_pktid_xmit_init(&ks->pid_xmit);

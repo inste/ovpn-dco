@@ -76,7 +76,7 @@ struct ovpn_crypto_key_slot {
 	struct crypto_aead *decrypt;
 	struct ovpn_nonce_tail nonce_tail_xmit;
 	struct ovpn_nonce_tail nonce_tail_recv;
-	u8 xmit_iv[MAX_AUTHENC_IV_SIZE];
+	u8 xmit_iv_salt[MAX_AUTHENC_IV_SIZE];
 
 	struct ovpn_pktid_recv pid_recv ____cacheline_aligned_in_smp;
 	struct ovpn_pktid_xmit pid_xmit ____cacheline_aligned_in_smp;
