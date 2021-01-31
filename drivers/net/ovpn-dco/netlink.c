@@ -202,7 +202,10 @@ static int ovpn_netlink_get_key_dir(struct genl_info *info, struct nlattr *key,
 	}
 
 	switch (hmac) {
+	case OVPN_HMAC_ALG_MD5:
 	case OVPN_HMAC_ALG_SHA1:
+	case OVPN_HMAC_ALG_SHA256:
+	case OVPN_HMAC_ALG_SHA512:
 		attr = attrs[OVPN_KEY_DIR_ATTR_HMAC_KEY];
 		if (!attr)
 			return -EINVAL;

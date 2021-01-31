@@ -106,7 +106,10 @@ enum ovpn_cipher_alg {
 
 enum ovpn_hmac_alg {
 	OVPN_HMAC_ALG_NONE = 0,
+	OVPN_HMAC_ALG_MD5,
 	OVPN_HMAC_ALG_SHA1,
+	OVPN_HMAC_ALG_SHA256,
+	OVPN_HMAC_ALG_SHA512,
 };
 
 enum ovpn_del_peer_reason {

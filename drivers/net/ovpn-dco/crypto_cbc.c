@@ -15,6 +15,7 @@
 
 #include <crypto/authenc.h>
 #include <crypto/aead.h>
+#include <crypto/md5.h>
 #include <crypto/sha.h>
 #include <linux/skbuff.h>
 #include <linux/printk.h>
@@ -503,9 +504,21 @@ ovpn_cbc_crypto_key_slot_init(enum ovpn_cipher_alg alg,
 	}
 
 	switch (hmac_alg) {
+	case OVPN_HMAC_ALG_MD5:
+		halg_name = "hmac(md5)";
+		auth_size = MD5_DIGEST_SIZE;
+		break;
 	case OVPN_HMAC_ALG_SHA1:
 		halg_name = "hmac(sha1)";
 		auth_size = SHA1_DIGEST_SIZE;
+		break;
+	case OVPN_HMAC_ALG_SHA256:
+		halg_name = "hmac(sha256)";
+		auth_size = SHA256_DIGEST_SIZE;
+		break;
+	case OVPN_HMAC_ALG_SHA512:
+		halg_name = "hmac(sha512)";
+		auth_size = SHA512_DIGEST_SIZE;
 		break;
 	case OVPN_HMAC_ALG_NONE:
 		halg_name = NULL;
