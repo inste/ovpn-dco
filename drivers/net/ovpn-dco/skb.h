@@ -24,6 +24,14 @@ struct ovpn_skb_cb {
 
 	/* OpenVPN packet ID */
 	u32 pktid;
+
+	/* peer we holding kref on */
+	struct ovpn_peer *peer;
+
+	/* keyslot we holding kref on */
+	struct ovpn_crypto_key_slot *ks;
+
+	struct scatterlist *sg;
 };
 
 /* READ_ONCE version of skb_queue_len()

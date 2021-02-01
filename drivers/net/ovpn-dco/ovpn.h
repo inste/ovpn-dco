@@ -35,9 +35,12 @@ netdev_tx_t ovpn_net_xmit(struct sk_buff *skb, struct net_device *dev);
 int ovpn_recv(struct ovpn_struct *ovpn, struct ovpn_peer *peer, struct sk_buff *skb);
 
 void ovpn_encrypt_work(struct work_struct *work);
+void ovpn_send_work(struct work_struct *work);
 void ovpn_decrypt_work(struct work_struct *work);
 int ovpn_napi_poll(struct napi_struct *napi, int budget);
 
 int ovpn_send_data(struct ovpn_struct *ovpn, const u8 *data, size_t len);
+
+void ovpn_send_out(struct sk_buff *skb);
 
 #endif /* _NET_OVPN_DCO_OVPN_H_ */

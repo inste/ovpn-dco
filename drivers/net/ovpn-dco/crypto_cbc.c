@@ -11,6 +11,7 @@
 #include "pktid.h"
 #include "proto.h"
 #include "skb.h"
+#include "ovpn.h"
 
 #include <crypto/authenc.h>
 #include <crypto/aead.h>
@@ -70,6 +71,18 @@ static inline int ovpn_cbc_min_s(const int a, const int b)
 	return a > b ? b : a;
 }
 
+static void ovpn_cbc_encrypt_done(struct crypto_async_request *req, int error)
+{
+	struct sk_buff *skb = req->data;
+
+	if (likely(error >= 0))
+		ovpn_send_out(skb);
+
+	ovpn_crypto_key_slot_put(OVPN_SKB_CB(skb)->ks);
+	kfree(OVPN_SKB_CB(skb)->sg);
+	kfree(req);
+}
+
 static int ovpn_cbc_encrypt(struct ovpn_crypto_key_slot *ks,
 			     struct sk_buff *skb, enum ovpn_data_format data_format)
 {
@@ -77,8 +90,8 @@ static int ovpn_cbc_encrypt(struct ovpn_crypto_key_slot *ks,
 	const unsigned int iv_size = crypto_aead_ivsize(ks->encrypt);
 	const unsigned int tag_size = crypto_aead_authsize(ks->encrypt);
 	unsigned int crypt_size = skb->len + sizeof(uint32_t);
-	struct scatterlist sg[MAX_SKB_FRAGS + 1];
-	u8 iv[MAX_AUTHENC_IV_SIZE];
+	struct scatterlist *sg;
+	//u8 iv[MAX_AUTHENC_IV_SIZE];
 	DECLARE_CRYPTO_WAIT(wait);
 	struct aead_request *req;
 	struct sk_buff *trailer;
@@ -86,6 +99,7 @@ static int ovpn_cbc_encrypt(struct ovpn_crypto_key_slot *ks,
 	u32 pktid, op;
 	u8 op8;
 	u8 *tail;
+	u8 *iv;
 	unsigned int i;
 	const u8 opcode_size =
 		(data_format == OVPN_P_DATA_V1 ? OVPN_OP_SIZE_V1 : OVPN_OP_SIZE_V2);
@@ -102,6 +116,13 @@ static int ovpn_cbc_encrypt(struct ovpn_crypto_key_slot *ks,
 	 * [ OP32 ] [ HMAC          ] [ - IV -                          ] [ *ID* ] [ * packet payload * ]
 	 */
 
+	sg = kmalloc((MAX_SKB_FRAGS + 1) * sizeof(struct scatterlist) + iv_size, GFP_KERNEL);
+
+	if (unlikely(sg == NULL))
+		return -ENOMEM;
+
+	iv = (u8 *)sg + (MAX_SKB_FRAGS + 1) * sizeof(struct scatterlist);
+
 	/* check that there's enough headroom in the skb for packet
 	 * encapsulation, after adding network header and encryption overhead
 	 */
@@ -114,7 +135,7 @@ static int ovpn_cbc_encrypt(struct ovpn_crypto_key_slot *ks,
 	if (unlikely(nfrags < 0))
 		return nfrags;
 
-	if (unlikely(nfrags + 1 > ARRAY_SIZE(sg)))
+	if (unlikely(nfrags > MAX_SKB_FRAGS))
 		return -ENOSPC;
 
 	req = aead_request_alloc(ks->encrypt, GFP_KERNEL);
@@ -187,20 +208,41 @@ static int ovpn_cbc_encrypt(struct ovpn_crypto_key_slot *ks,
 		*((u8 *)skb->data) = op8;
 	}
 
+	OVPN_SKB_CB(skb)->sg = sg;
+
 	/* setup async crypto operation */
 	aead_request_set_tfm(req, ks->encrypt);
 	aead_request_set_callback(req, CRYPTO_TFM_REQ_MAY_BACKLOG |
 				       CRYPTO_TFM_REQ_MAY_SLEEP,
-				  crypto_req_done, &wait);
+				  ovpn_cbc_encrypt_done, skb);
 	aead_request_set_crypt(req, sg, sg, crypt_size, iv);
 	aead_request_set_ad(req, iv_size);
 
-	/* encrypt it */
-	ret = crypto_wait_req(crypto_aead_encrypt(req), &wait);
-	if (ret < 0)
-		pr_err_ratelimited("%s: encrypt failed: %d\n", __func__, ret);
+	ret = crypto_aead_encrypt(req);
+
+	pr_info_ratelimited("enq ret %d\n", ret);
+
+	switch (ret) {
+	case -EINPROGRESS:
+		pr_info_ratelimited("scheduled\n");
+		return ret;
+
+	case 0:
+		ovpn_crypto_key_slot_put(OVPN_SKB_CB(skb)->ks);
+		ovpn_send_out(skb);
+		break;
+
+	case -EBUSY:
+	default:
+		ovpn_crypto_key_slot_put(OVPN_SKB_CB(skb)->ks);
+		ovpn_peer_put(OVPN_SKB_CB(skb)->peer);
+		consume_skb(skb);
+
+		break;
+	}
 
 free_req:
+	kfree(sg);
 	aead_request_free(req);
 	return ret;
 }

@@ -20,6 +20,7 @@
 #include <linux/ptr_ring.h>
 #include <net/dst_cache.h>
 
+
 struct ovpn_peer {
 	struct ovpn_struct *ovpn;
 
@@ -27,10 +28,13 @@ struct ovpn_peer {
 	 * these works are queued on the ovpn->crypt_wq workqueue.
 	 */
 	struct work_struct encrypt_work;
+	struct work_struct send_work;
 	struct work_struct decrypt_work;
 
 	struct ptr_ring tx_ring;
+	struct ptr_ring tx_out_ring;
 	struct ptr_ring rx_ring;
+
 	struct ptr_ring netif_rx_ring;
 
 	struct napi_struct napi;

@@ -205,6 +205,8 @@ static void hexdump(const char* pfx, const unsigned char *buf, unsigned int len)
 /* V2 on wire code */
 #define COMP_ALGV2_INDICATOR_BYTE       0x50
 
+//static int ovpn_decrypt_one2(struct 
+
 static int ovpn_decrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 {
 	struct ovpn_crypto_key_slot *ks;
@@ -363,16 +365,71 @@ void ovpn_decrypt_work(struct work_struct *work)
 	ovpn_peer_put(peer);
 }
 
+static void ovpn_send_one(struct ovpn_peer *peer, struct sk_buff *skb)
+{
+	switch (peer->ovpn->proto) {
+	case OVPN_PROTO_UDP4:
+	case OVPN_PROTO_UDP6:
+		ovpn_udp_send_skb(peer->ovpn, peer, skb);
+	break;
+	case OVPN_PROTO_TCP4:
+	case OVPN_PROTO_TCP6:
+		ovpn_tcp_send_skb(peer, skb);
+	break;
+	default:
+		/* no transport configured yet */
+		consume_skb(skb);
+		break;
+	}
+}
+
+void ovpn_send_work(struct work_struct *work)
+{
+	struct sk_buff *skb;
+	struct ovpn_peer *peer;
+	size_t i, ctr = 0;
+
+	peer = container_of(work, struct ovpn_peer, send_work);
+
+	while ((skb = __ptr_ring_consume(&peer->tx_out_ring))) {
+		ovpn_send_one(peer, skb);
+		ctr++;
+
+		/* give a chance to be rescheduled if needed */
+		if (need_resched())
+			cond_resched();
+	}
+
+	for (i = 0; i < ctr; ++i)
+		ovpn_peer_put(peer);
+}
+
+void ovpn_send_out(struct sk_buff *skb)
+{
+	struct ovpn_peer *peer = OVPN_SKB_CB(skb)->peer;
+	int ret;
+	ret = __ptr_ring_produce(&peer->tx_out_ring, skb);
+	if (unlikely(ret < 0)) {
+		pr_err_ratelimited("%s: cannot queue packet to TX out ring\n", __func__);
+		goto drop;
+	}
+
+	queue_work(peer->ovpn->crypto_wq, &peer->send_work);
+	return;
+drop:
+	ovpn_peer_put(peer);
+	consume_skb(skb);
+}
+
 static bool ovpn_encrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 {
 	struct ovpn_crypto_key_slot *ks;
-	bool success = false;
-	int ret;
 
 	/* get primary key to be used for encrypting data */
 	ks = ovpn_crypto_key_slot_primary(&peer->crypto);
 	if (unlikely(!ks)) {
 		pr_info_ratelimited("%s: error while retrieving primary key slot\n", __func__);
+		kfree_skb(skb);
 		return false;
 	}
 
@@ -385,17 +442,22 @@ static bool ovpn_encrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 		goto err;
 	}
 
-	/* encrypt */
-	ret = ks->ops->encrypt(ks, skb, peer->ovpn->data_format);
-	if (unlikely(ret < 0)) {
-		pr_err_ratelimited("%s: error during encryption: %d\n", __func__, ret);
-		goto err;
-	}
+	rcu_read_lock();
+	ovpn_peer_hold(peer);
+	rcu_read_unlock();
+	OVPN_SKB_CB(skb)->peer = peer;
+	OVPN_SKB_CB(skb)->ks = ks;
 
-	success = true;
+	/* encrypt */
+	ks->ops->encrypt(ks, skb, peer->ovpn->data_format);
+
+	return true;
+
 err:
 	ovpn_crypto_key_slot_put(ks);
-	return success;
+	kfree_skb(skb);
+
+	return false;
 }
 
 /* Process packets in TX queue in a transport-specific way.
@@ -455,39 +517,9 @@ void ovpn_encrypt_work(struct work_struct *work)
 		 * independently
 		 */
 		skb_queue_walk_safe(&skb_list, curr, next) {
-			/* if one segment fails encryption, we drop the entire
-			 * packet, because it does not really make sense to send
-			 * only part of it at this point
-			 */
+			skb_mark_not_on_list(curr);
 
-			if (unlikely(!ovpn_encrypt_one(peer, curr))) {
-				skb_queue_walk_safe(&skb_list, curr, next)
-					kfree_skb(curr);
-				skb = NULL;
-				break;
-			}
-		}
-
-		/* successful encryption */
-		if (likely(skb)) {
-			skb_queue_walk_safe(&skb_list, curr, next) {
-				skb_mark_not_on_list(curr);
-
-				switch (peer->ovpn->proto) {
-				case OVPN_PROTO_UDP4:
-				case OVPN_PROTO_UDP6:
-					ovpn_udp_send_skb(peer->ovpn, peer, curr);
-					break;
-				case OVPN_PROTO_TCP4:
-				case OVPN_PROTO_TCP6:
-					ovpn_tcp_send_skb(peer, curr);
-					break;
-				default:
-					/* no transport configured yet */
-					consume_skb(skb);
-					break;
-				}
-			}
+			ovpn_encrypt_one(peer, curr);
 		}
 
 		/* give a chance to be rescheduled if needed */

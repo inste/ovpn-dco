@@ -108,6 +108,7 @@ static struct ovpn_peer *ovpn_peer_new(struct ovpn_struct *ovpn)
 	ovpn_peer_stats_init(&peer->stats);
 
 	INIT_WORK(&peer->encrypt_work, ovpn_encrypt_work);
+	INIT_WORK(&peer->send_work, ovpn_send_work);
 	INIT_WORK(&peer->decrypt_work, ovpn_decrypt_work);
 
 	/* configure and start NAPI */
@@ -127,10 +128,16 @@ static struct ovpn_peer *ovpn_peer_new(struct ovpn_struct *ovpn)
 		goto err_dst_cache;
 	}
 
+	ret = ptr_ring_init(&peer->tx_out_ring, OVPN_QUEUE_LEN, GFP_KERNEL);
+	if (ret < 0) {
+		pr_err("cannot allocate TX out ring\n");
+		goto err_tx_ring;
+	}
+
 	ret = ptr_ring_init(&peer->rx_ring, OVPN_QUEUE_LEN, GFP_KERNEL);
 	if (ret < 0) {
 		pr_err("cannot allocate RX ring\n");
-		goto err_tx_ring;
+		goto err_tx_out_ring;
 	}
 
 	ret = ptr_ring_init(&peer->netif_rx_ring, OVPN_QUEUE_LEN, GFP_KERNEL);
@@ -177,6 +184,8 @@ err_netif_rx_ring:
 	ptr_ring_cleanup(&peer->netif_rx_ring, NULL);
 err_rx_ring:
 	ptr_ring_cleanup(&peer->rx_ring, NULL);
+err_tx_out_ring:
+	ptr_ring_cleanup(&peer->tx_out_ring, NULL);
 err_tx_ring:
 	ptr_ring_cleanup(&peer->tx_ring, NULL);
 err_dst_cache:
@@ -217,6 +226,8 @@ void ovpn_peer_release(struct ovpn_peer *peer)
 
 	WARN_ON(!__ptr_ring_empty(&peer->tx_ring));
 	ptr_ring_cleanup(&peer->tx_ring, NULL);
+	WARN_ON(!__ptr_ring_empty(&peer->tx_out_ring));
+	ptr_ring_cleanup(&peer->tx_out_ring, NULL);
 	WARN_ON(!__ptr_ring_empty(&peer->rx_ring));
 	ptr_ring_cleanup(&peer->rx_ring, NULL);
 	WARN_ON(!__ptr_ring_empty(&peer->netif_rx_ring));
